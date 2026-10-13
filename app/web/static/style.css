@@ -544,6 +544,7 @@ tbody tr.selected:hover { background: color-mix(in srgb, var(--accent-soft) 70%,
 tbody tr:last-child td { border-bottom: none; }
 
 td.empty { color: var(--muted); text-align: center; padding: 26px; }
+td.more-row { color: var(--muted); text-align: center; padding: 10px; }
 
 .col-check { width: 34px; padding-right: 0; }
 

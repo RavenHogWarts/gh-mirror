@@ -499,6 +499,11 @@ function visibleRepos() {
 
 let _reposKey = null;
 
+/* 大目录分批渲染:先渲染前 RENDER_STEP 行,其余点"加载更多"展开。
+   全量渲染几千行(每行还有下拉与按钮)会让 DOM 与重排开销成为大头。 */
+const RENDER_STEP = 200;
+let renderCap = RENDER_STEP;
+
 function renderRepos() {
   // 用户正与行内下拉交互时跳过本轮重建,避免选择被冲掉
   const active = document.activeElement;
@@ -513,11 +518,13 @@ function renderRepos() {
     _reposKey = null;
     return;
   }
-  const rows = visibleRepos().sort(cmpRepos);
-  // 数据指纹:内容没变就不重建 DOM(轮询每 4s 一次,重建会打断悬停/滚动/选择)
+  const all = visibleRepos().sort(cmpRepos);
+  const rows = all.slice(0, renderCap);
+  // 数据指纹(只算已渲染行 + 总数):内容没变就不重建 DOM(轮询会反复调用,重建会打断悬停/滚动/选择)
   const key = JSON.stringify([
-    rows.map((r) => [r.full_name, r.status, r.org, r.mirrored, r.gitea_updated,
+    rows.map((r) => [r.full_name, r.status, r.org, r.gitea_updated,
                      r.error, r.mirror_full, r.default_target, r.gitea_full]),
+    all.length, renderCap,
     [...state.checked].sort(), state.sort.key, state.sort.dir,
     state.filter, state.filterStatus, state.filterOrigin, state.giteaUrl,
   ]);
@@ -594,8 +601,17 @@ function renderRepos() {
       ${updatedTd}
       <td><span class="row-actions">${actions.join("") || '<span class="src-note">—</span>'}</span></td>
     </tr>`;
-  }).join("");
+  }).join("") + (all.length > rows.length
+    ? `<tr><td colspan="7" class="more-row">已显示 ${rows.length}/${all.length} · ` +
+      `<button class="btn sm" data-load-more>显示其余 ${all.length - rows.length} 个</button></td></tr>`
+    : "");
 }
+
+$("repo-body").addEventListener("click", (ev) => {
+  if (!ev.target.closest("button[data-load-more]")) return;
+  renderCap = Number.MAX_SAFE_INTEGER; // 全部展开;换筛选/排序时回到分批
+  renderRepos();
+});
 
 function cmpRepos(a, b) {
   const { key, dir } = state.sort;
@@ -618,6 +634,7 @@ document.querySelectorAll("th.th-sort").forEach((th) =>
     const k = th.dataset.sortkey;
     if (state.sort.key === k) state.sort.dir *= -1;
     else state.sort = { key: k, dir: 1 };
+    renderCap = RENDER_STEP;
     updateSortHeaders();
     renderRepos();
   }));
@@ -644,6 +661,7 @@ $("status-filters").addEventListener("click", (ev) => {
   const chip = ev.target.closest(".fchip");
   if (!chip) return;
   state.filterStatus = chip.dataset.status;
+  renderCap = RENDER_STEP;
   renderFilterChips();
   renderRepos();
   updateCheckAll();
@@ -652,6 +670,7 @@ $("origin-filters").addEventListener("click", (ev) => {
   const chip = ev.target.closest(".fchip");
   if (!chip) return;
   state.filterOrigin = chip.dataset.origin;
+  renderCap = RENDER_STEP;
   renderFilterChips();
   renderRepos();
   updateCheckAll();
@@ -659,6 +678,7 @@ $("origin-filters").addEventListener("click", (ev) => {
 
 $("filter").addEventListener("input", (ev) => {
   state.filter = ev.target.value.trim();
+  renderCap = RENDER_STEP;
   renderRepos();
   updateCheckAll();
 });
