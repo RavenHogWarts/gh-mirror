@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="gl" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#54aeff"/>
+      <stop offset="1" stop-color="#0969da"/>
+    </linearGradient>
+    <linearGradient id="gd" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4493f8"/>
+      <stop offset="1" stop-color="#1f4d7a"/>
+    </linearGradient>
+  </defs>
+  <style>
+    @media (prefers-color-scheme: dark) { .bg { fill: url(#gd); } }
+  </style>
+  <!-- 与页头 brand-logo 同源:圆角徽章 + git-branch 图形,亮暗跟随系统 -->
+  <rect class="bg" width="64" height="64" rx="16" fill="url(#gl)"/>
+  <g fill="none" stroke="#fff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" transform="translate(8 8) scale(2)">
+    <line x1="6" x2="6" y1="3" y2="15"/>
+    <circle cx="18" cy="6" r="3"/>
+    <circle cx="6" cy="18" r="3"/>
+    <path d="M18 9a9 9 0 0 1-9 9"/>
+  </g>
+</svg>
