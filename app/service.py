@@ -436,16 +436,22 @@ class MirrorService:
     # ---------------- 组织落位 ----------------
 
     async def ensure_org(self, name: str, desc: str = "") -> tuple[bool, str]:
-        """组织存在→ok;不存在→创建(描述优先取传入值,缺省查面板配置,创建者即 token 用户)。"""
+        """组织存在→ok;不存在→创建(描述优先取传入值,缺省查面板配置,创建者即 token 用户)。
+        网络/服务端异常一律折算为 (False, 原因) 返回,不向调用方抛出,避免中断整批。"""
         try:
             if await self.gitea.get_org(name) is not None:
                 return True, "已存在"
         except GiteaError as e:
             return False, str(e)
+        except Exception as e:
+            return False, f"{type(e).__name__}: {e}"
         if not desc:
             desc = next((o.get("description", "") for o in self.store.orgs
                          if o["name"].lower() == name.lower()), "")
-        ok, detail = await self.gitea.create_org(name, desc)
+        try:
+            ok, detail = await self.gitea.create_org(name, desc)
+        except Exception as e:
+            return False, f"{type(e).__name__}: {e}"
         if ok:
             self.log(f"✓ 自动创建组织 {name}")
         return ok, detail
