@@ -608,9 +608,26 @@ class MirrorService:
         return ok, detail
 
     def _find(self, full: str) -> dict | None:
-        """按 full_name 查目录条目(大小写不敏感)。"""
+        """按 full_name 查目录条目(大小写不敏感)。
+        视图可能还没刷新(刚通过 /api/extra 添加),回退到配置合成条目,
+        避免"先添加再启用"出现"不在目录中"的竞态。"""
         low = full.lower()
-        return next((v for v in self.repos.values() if v["full_name"].lower() == low), None)
+        item = next((v for v in self.repos.values() if v["full_name"].lower() == low), None)
+        if item is not None:
+            return item
+        entry = next((e for e in self.store.extra_repos if e["source"].lower() == low), None)
+        if entry is None:
+            return None
+        spec = self._extra_spec(entry)
+        org = entry.get("org", "")
+        name = self._repo_name(spec["default_name"], entry.get("name", ""))
+        return {
+            "full_name": entry["source"], "origin": "extra", "gh_owner": "",
+            "org": org, "gitea_name": name,
+            "gitea_full": f"{org}/{name}" if org else "",
+            "status": "missing" if org else "disabled",
+            "mirrored": False, "mirror_full": "", "error": "",
+        }
 
     def _find_by_gitea_full(self, gitea_full: str) -> dict | None:
         low = gitea_full.lower()
