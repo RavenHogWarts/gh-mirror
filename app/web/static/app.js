@@ -314,7 +314,7 @@ function renderStatus(st) {
   }
 
   $("running-badge").classList.toggle("hidden", !st.reconcile.running);
-  set("running-badge-text", st.reconcile.running && prog && prog.total > 0
+  set("running-badge-text", st.reconcile.running && prog && prog.title === "对账" && prog.total > 0
     ? `对账中 ${prog.done}/${prog.total}…` : "对账中…");
   if (_reconcileShown !== st.reconcile.running) {
     _reconcileShown = st.reconcile.running;

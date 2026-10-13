@@ -75,34 +75,39 @@ class MirrorService:
         # 不放进视图字典接力:对账循环长达数分钟,期间视图会被轮询反复重建,
         # 写在旧字典上的状态随时可能被丢弃。
         self.failures: dict[str, str] = {}
-        # 批量操作进度(对账 / 批量同步):标题 + 计数 + 当前条目,status_payload 暴露给前端画进度条
-        self.progress: dict | None = None
-        self._progress_t0: float = 0.0
+        # 批量操作进度(对账 / 批量同步可并发):按操作各持一份,互不清除;
+        # status_payload 取最近活跃的一个暴露给前端画进度条
+        self.progress_ops: dict[int, dict] = {}
 
     def log(self, msg: str, level: str = "info") -> None:
         self.logs.append({"time": _now(), "level": level, "msg": msg})
 
-    # ---------------- 批量进度(状态卡片进度条) ----------------
+    # ---------------- 批量进度(状态卡片进度条;并发操作各持一份) ----------------
 
-    def progress_begin(self, title: str, total: int) -> None:
-        self.progress = {"title": title, "total": total, "done": 0, "ok": 0,
-                         "failed": 0, "current": ""}
-        self._progress_t0 = time.monotonic()
+    def progress_begin(self, title: str, total: int) -> dict:
+        """开一个进度跟踪器;返回的 token 供 total/step/tick/end 使用,结束时只清自己。"""
+        now = time.monotonic()
+        op = {"title": title, "total": total, "done": 0, "ok": 0, "failed": 0,
+              "current": "", "t0": now, "ts": now}
+        self.progress_ops[id(op)] = op
+        return op
 
-    def progress_total(self, total: int) -> None:
-        if self.progress is not None:
-            self.progress["total"] = total
+    def progress_total(self, op: dict, total: int) -> None:
+        op["total"] = total
+        op["ts"] = time.monotonic()
 
-    def progress_step(self, current: str) -> None:
-        if self.progress is not None:
-            self.progress["current"] = current
+    def progress_step(self, op: dict, current: str) -> None:
+        op["current"] = current
+        op["ts"] = time.monotonic()
 
-    def progress_tick(self, ok: bool) -> None:
-        if self.progress is None:
-            return
-        self.progress["done"] += 1
-        self.progress["ok" if ok else "failed"] += 1
-        self.progress["current"] = ""
+    def progress_tick(self, op: dict, ok: bool) -> None:
+        op["done"] += 1
+        op["ok" if ok else "failed"] += 1
+        op["current"] = ""
+        op["ts"] = time.monotonic()
+
+    def progress_end(self, op: dict) -> None:
+        self.progress_ops.pop(id(op), None)
 
     @property
     def backup_running(self) -> bool:
@@ -496,8 +501,8 @@ class MirrorService:
             self.log("自检未完成,按现有信息继续对账", "warn")
         self.reconcile_running = True
         self.log("开始对账…")
-        self.progress_begin("对账", 0)
-        self.progress_step("刷新目录视图…")
+        prog = self.progress_begin("对账", 0)
+        self.progress_step(prog, "刷新目录视图…")
         try:
             await self.refresh_view()
             pending = [v for v in self.repos.values() if v["status"] in ("missing", "failed")]
@@ -513,13 +518,13 @@ class MirrorService:
                 return summary
 
             total = len(pending)
-            self.progress_total(total)
+            self.progress_total(prog, total)
             created = failed = 0
             for i, item in enumerate(pending, 1):
                 org = item["org"]
                 full_low = item["full_name"].lower()
                 tag = f"[{i}/{total}] "
-                self.progress_step(f"{item['full_name']} → {org}/{item['gitea_name']}")
+                self.progress_step(prog, f"{item['full_name']} → {org}/{item['gitea_name']}")
                 ok, detail = await self.ensure_org(org)
                 if not ok:
                     failed += 1
@@ -527,7 +532,7 @@ class MirrorService:
                     self.failures[full_low] = err
                     item.update(status="failed", error=err)
                     self.log(f"✗ {tag}{item['full_name']}:组织 {org} 创建失败:{detail}", "error")
-                    self.progress_tick(False)
+                    self.progress_tick(prog, False)
                     continue
                 self.log(f"{tag}迁移 {item['full_name']} → {org}/{item['gitea_name']}…")
                 ok, detail = await self._migrate_logged(item, tag)
@@ -541,7 +546,7 @@ class MirrorService:
                     self.failures[full_low] = detail
                     item.update(status="failed", error=detail)
                     self.log(f"✗ {tag}{item['full_name']} 建镜像失败:{detail}", "error")
-                self.progress_tick(ok)
+                self.progress_tick(prog, ok)
             done = sum(1 for v in self.repos.values() if v["status"] == "ok")
             disabled = sum(1 for v in self.repos.values() if v["status"] == "disabled")
             summary = (f"对账完成:新增 {created},失败 {failed},"
@@ -554,7 +559,7 @@ class MirrorService:
             self.log(summary, "error")
             return summary
         finally:
-            self.progress = None
+            self.progress_end(prog)
             self.reconcile_running = False
             self.last_reconcile = _now()
 
@@ -835,8 +840,10 @@ class MirrorService:
         for r in repos:
             origins[r["origin"]] = origins.get(r["origin"], 0) + 1
         progress = None
-        if self.progress:
-            progress = {**self.progress, "elapsed": int(time.monotonic() - self._progress_t0)}
+        if self.progress_ops:
+            op = max(self.progress_ops.values(), key=lambda o: o["ts"])
+            progress = {k: op[k] for k in ("title", "total", "done", "ok", "failed", "current")}
+            progress["elapsed"] = int(time.monotonic() - op["t0"])
         return {
             "configured": {"github": self.github_ok, "gitea": self.gitea_ok},
             "github": {
