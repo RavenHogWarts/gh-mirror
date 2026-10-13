@@ -168,8 +168,14 @@ async def api_orphans(request: Request):
 
 
 @app.get("/api/logs")
-async def api_logs():
-    return list(svc.logs)
+async def api_logs(after: int = -1):
+    """日志支持 ?after=seq 增量拉取;seq 回卷(服务重启)时 reset=true,前端全量重拉。"""
+    logs = list(svc.logs)
+    if after < 0:
+        return {"seq": svc.log_seq, "logs": logs, "reset": False}
+    reset = after > svc.log_seq
+    out = [] if reset else [l for l in logs if l["seq"] > after]
+    return {"seq": svc.log_seq, "logs": out, "reset": reset}
 
 
 # ---------------- 组织管理 ----------------

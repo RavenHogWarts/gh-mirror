@@ -58,6 +58,7 @@ class MirrorService:
         self.gitea_orgs: list[str] = []
         self.org_repo_counts: dict[str, int] = {}
         self.logs: deque[dict] = deque(maxlen=300)
+        self.log_seq = 0  # 日志单调序号(前端 ?after= 增量拉取;重启回卷由 reset 提示)
         # 数据版本号:视图重建 / 条目就地变更 / 配置落盘时 +1,
         # /api/repos 等列表接口据此做 ETag,未变化时回 304 跳过序列化
         self.data_version = 0
@@ -97,7 +98,8 @@ class MirrorService:
         store.on_change = self._bump_data_version
 
     def log(self, msg: str, level: str = "info") -> None:
-        self.logs.append({"time": _now(), "level": level, "msg": msg})
+        self.log_seq += 1
+        self.logs.append({"time": _now(), "level": level, "msg": msg, "seq": self.log_seq})
 
     def _bump_data_version(self) -> None:
         self.data_version += 1

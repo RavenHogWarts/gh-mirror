@@ -881,7 +881,9 @@ let logsKey = "", logErrorsOnly = false;
 function renderLogs(logs) {
   const el = $("logs");
   const shown = logErrorsOnly ? logs.filter((l) => l.level === "error" || l.level === "warn") : logs;
-  const key = `${logErrorsOnly}|${logs.length}|${logs.length ? logs[logs.length - 1].time + logs[logs.length - 1].msg : ""}`;
+  // 指纹含首尾 seq:增量追加与服务重启后的全量替换都能正确触发重绘
+  const key = `${logErrorsOnly}|${shown.length}|${shown[0] ? shown[0].seq : ""}|` +
+    `${shown[shown.length - 1] ? shown[shown.length - 1].seq : ""}`;
   if (key !== logsKey) {
     logsKey = key;
     el.innerHTML = shown.length
@@ -1258,16 +1260,22 @@ $("settings-form").addEventListener("submit", async (ev) => {
 
 /* ---------- 轮询与入口 ---------- */
 
+let logCursor = -1;       // 日志增量游标(-1 = 首次全量拉取)
+
 async function refresh() {
   try {
-    const [st, repos, orphans, orgs, logs] = await Promise.all([
+    const [st, repos, orphans, orgs, logsR] = await Promise.all([
       api("/api/status"), api("/api/repos"), api("/api/orphans"),
-      api("/api/orgs"), api("/api/logs"),
+      api("/api/orgs"), api(`/api/logs${logCursor >= 0 ? "?after=" + logCursor : ""}`),
     ]);
+    // 日志:正常追加;reset(服务重启,序号回卷)则全量替换
+    if (logsR.reset) state._lastLogs = logsR.logs;
+    else if (logCursor >= 0) state._lastLogs = (state._lastLogs || []).concat(logsR.logs).slice(-300);
+    else state._lastLogs = logsR.logs;
+    logCursor = logsR.seq;
     state.repos = repos;
     state.orphans = orphans;
     state.orgs = orgs;
-    state._lastLogs = logs;
     // 选中集合按现存仓库收敛(仓库可能被删/新出现)
     const known = new Set(repos.map((r) => r.full_name));
     state.checked = new Set([...state.checked].filter((f) => known.has(f)));
@@ -1277,7 +1285,7 @@ async function refresh() {
     // 各区块独立渲染:一处异常不拖垮其余区块
     for (const fn of [
       () => renderStatus(st), renderOrgs, renderFilterChips, renderRepos,
-      renderBulkBar, updateCheckAll, renderOrphans, () => renderLogs(logs),
+      renderBulkBar, updateCheckAll, renderOrphans, () => renderLogs(state._lastLogs),
     ]) {
       try { fn(); } catch (e) { console.error("渲染失败:", fn.name || fn, e); }
     }

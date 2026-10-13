@@ -159,7 +159,7 @@ python -m app                  # http://localhost:13655
 ## REST API(自动文档见 `/api/docs`)
 
 - 状态:`GET /api/status`(含按来源计数)、`GET /api/repos`(含 origin/status/default_target)、
-  `GET /api/orphans`、`GET /api/logs`
+  `GET /api/orphans`、`GET /api/logs`(支持 `?after=seq` 增量;响应 `{seq, logs, reset}`)
 - 列表接口带数据版本 ETag:内容未变回 304,轮询不再重复传输/序列化大列表
 - 组织:`GET/POST /api/orgs`、`PATCH/DELETE /api/orgs/{name}`(删仅限空组织且无引用)、
   `POST /api/orgs/{name}/rename {new_name}`
