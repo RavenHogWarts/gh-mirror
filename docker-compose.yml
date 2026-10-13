@@ -1,0 +1,60 @@
+# gh-mirror + Gitea 一体化编排:docker compose up -d 即得完整备份站
+#
+# 配置说明(2026-10 起):运行时配置以 mirror_data 卷里的 config.json 为准,
+# 在网页右上角「⚙ 设置」里修改,保存即时生效。下面的 environment 仅在
+# 数据卷中还没有 config.json 时作为"首次播种"值(旧 .env 可无缝迁移),
+# 之后改这里不再生效,请直接在网页里改。
+services:
+  gitea:
+    image: docker.gitea.com/gitea:28.1.0
+    container_name: gitea
+    restart: unless-stopped
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - GITEA__security__INSTALL_LOCK=true
+      - GITEA__service__DISABLE_REGISTRATION=true
+      - GITEA__server__DOMAIN=localhost
+      - GITEA__server__ROOT_URL=${GITEA_PUBLIC_URL:-http://localhost:13654}/
+      - GITEA__server__LFS_START_SERVER=true
+      # 允许从内网/本机地址迁移镜像(否则 migrate 内部 git URL 报 disallowed hosts)
+      - GITEA__migrations__ALLOW_LOCALNETWORKS=true
+    volumes:
+      # 默认:named volume(推荐)。数据在 Docker 管理的卷中,down/重建不丢,仅 down -v 删除;
+      # 查看实际位置:docker volume inspect gh-mirror_gitea-data
+      - gitea_data:/data
+      # 备选:挂到宿主机目录(文件直接可见)。Windows 下走 9p/gRPC-FUSE:
+      # IO 明显变慢、SQLite 有文件锁风险,仓库多时不建议;Linux 宿主机则无此顾虑。
+      # 用法:注释上面一行,放开下面这行(mkdir ./gitea-data)
+      # - ./gitea-data:/data
+    ports:
+      - "13654:3000"   # 宿主机 13654 -> 容器 3000(如需对调端口,改冒号左边的数字)
+
+  mirror:
+    build: .
+    container_name: mirror
+    restart: unless-stopped
+    environment:
+      # —— 以下均为可选的首次播种值,网页「设置」里改即生效,无需动这里 ——
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GITHUB_ORGS=${GITHUB_ORGS:-}
+      - INCLUDE_FORKS=${INCLUDE_FORKS:-1}
+      # 容器网络内访问 Gitea 的地址——硬编码服务名;.env 里的 localhost 值
+      # 是宿主机视角,进了容器不通(浏览器地址走 GITEA_PUBLIC_URL)
+      - GITEA_URL=http://gitea:3000
+      - GITEA_PUBLIC_URL=${GITEA_PUBLIC_URL:-http://localhost:13654}
+      - GITEA_TOKEN=${GITEA_TOKEN:-}
+      - GITEA_OWNER=${GITEA_OWNER:-}
+      - MIRROR_INTERVAL=${MIRROR_INTERVAL:-8h0m0s}
+      - RECONCILE_EVERY_MIN=${RECONCILE_EVERY_MIN:-60}
+      - BACKUP_CMD=${BACKUP_CMD:-}
+    volumes:
+      - mirror_data:/app/data   # 网页修改的配置持久化在这里(config.json)
+    ports:
+      - "13655:8000"   # 宿主机 13655 -> 容器 8000
+    depends_on:
+      - gitea
+
+volumes:
+  gitea_data:
+  mirror_data:
