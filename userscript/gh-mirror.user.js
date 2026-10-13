@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         gh-mirror 一键同步
 // @namespace    https://github.com/gh-mirror
-// @version      1.1.0
+// @version      1.1.1
 // @description  在 GitHub 仓库页一键加入 gh-mirror 目录 / 启用同步 / 立即拉取,状态实时显示
 // @match        https://github.com/*
 // @run-at       document-idle
@@ -138,6 +138,8 @@
   const STYLES = `
     #${BTN_ID}-li { list-style: none; }
     #${BTN_ID} { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+    #${BTN_ID}.ghm-fade { animation: ghm-fade-in .15s ease-out; }
+    @keyframes ghm-fade-in { from { opacity: 0; } to { opacity: 1; } }
     #${BTN_ID} .ghm-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
     #${BTN_ID}.ghm-ok { color: var(--color-success-emphasis, #1a7f37); }
     #${BTN_ID}.ghm-pending { color: var(--color-attention-emphasis, #9a6700); }
@@ -381,21 +383,22 @@
     refreshBtn(btn, slug);
   }
 
-  function mount(slug) {
-    if (document.getElementById(BTN_ID)) return;
-    // 2026 版 GitHub 仓库头部:操作区是含 Notifications/Fork/Star 的 ul。
-    // 其 class 带 CSS-module 哈希会随构建变化,所以按语义(aria-label/文本)定位再取容器。
+  // 2026 版 GitHub 仓库头部:操作区是含 Notifications/Fork/Star 的 ul。
+  // 其 class 带 CSS-module 哈希会随构建变化,所以按语义(aria-label/文本)定位再取容器。
+  function findActionsUl() {
     const anchor = [...document.querySelectorAll("main a, main button")].find((el) => {
       const label = (el.getAttribute("aria-label") || el.textContent || "").trim();
       return /^(un)?(star|fork|watch)|^notifications/i.test(label);
     });
-    const ul = anchor && anchor.closest("ul");
-    if (!ul) return; // 非仓库页(或 DOM 未就绪)
+    return anchor ? anchor.closest("ul") : null;
+  }
+
+  function mountInto(ul, slug) {
     const li = document.createElement("li");
     li.id = `${BTN_ID}-li`;
     const btn = document.createElement("button");
     btn.id = BTN_ID;
-    btn.className = "btn btn-sm ghm-off";
+    btn.className = "btn btn-sm ghm-off ghm-fade";
     btn.textContent = "gh-mirror…";
     btn.addEventListener("click", () => onButtonClick(btn, slug));
     li.appendChild(btn);
@@ -403,17 +406,46 @@
     refreshBtn(btn, slug);
   }
 
-  /* ---------- 入口:轮询补挂(处理 GitHub pjax 导航与 React 重渲染移除) ---------- */
+  /* ---------- 挂载时机:等水合稳定后一次性出现 ----------
+     首挂太早会被 React 水合重渲染清掉,造成"出现→消失→再出现"闪跳。
+     MutationObserver 记录 main 区域的 DOM 突变时间,窗口期(800ms)内安静
+     才首挂;挂载后若被点状重渲染移除,立即补挂(单次事件,不会连环闪)。 */
+
+  const STABLE_MS = 800;
+  let mounted = false;
+  let lastMutation = Date.now();
+  let churnObserver = null;
+
+  function observeChurn() {
+    const root = document.querySelector("main") || document.body;
+    if (churnObserver && churnObserver._root === root) return;
+    if (churnObserver) churnObserver.disconnect();
+    churnObserver = new MutationObserver(() => { lastMutation = Date.now(); });
+    churnObserver._root = root;
+    churnObserver.observe(root, { childList: true, subtree: true });
+  }
 
   let lastPath = "";
   function tick() {
+    observeChurn();
     if (location.pathname !== lastPath) {
       lastPath = location.pathname;
+      lastMutation = Date.now(); // 换页:重新等待稳定窗口
       const old = document.getElementById(`${BTN_ID}-li`);
-      if (old) old.remove(); // 换页后旧按钮状态过期,先移除
+      if (old) old.remove();     // 旧按钮绑定的是旧 slug,先移除
+      mounted = false;
     }
     const slug = currentSlug();
-    if (slug) mount(slug); // 已存在时 mount 直接返回;被 React 重渲染移除则补挂
+    if (!slug) return;
+    if (document.getElementById(BTN_ID)) return; // 已挂载且健在
+    const ul = findActionsUl();
+    if (!ul) return;
+    if (!mounted) {
+      // 首挂:窗口期内有 DOM 突变(仍在水合/重渲染)则等待
+      if (Date.now() - lastMutation < STABLE_MS) return;
+      mounted = true;
+    }
+    mountInto(ul, slug); // 首挂(安静后)或补挂(被移除后)
   }
 
   ensureStyles();
