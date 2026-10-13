@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         gh-mirror 一键同步
 // @namespace    https://github.com/gh-mirror
-// @version      1.0.1
+// @version      1.1.0
 // @description  在 GitHub 仓库页一键加入 gh-mirror 目录 / 启用同步 / 立即拉取,状态实时显示
 // @match        https://github.com/*
 // @run-at       document-idle
@@ -27,6 +27,9 @@
     String(GM_getValue("panel", DEFAULT_PANEL)).replace(/\/+$/, "");
 
   const panelUrl = (path) => panelBase() + path;
+
+  const esc = (s) =>
+    String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
   function xhr(method, path, body) {
     return new Promise((resolve, reject) => {
@@ -95,10 +98,20 @@
     return r ? r.detail : "已启用";
   }
 
-  async function addAndEnable(slug) {
-    await xhr("POST", "/api/extra", { source: slug, org: "", name: "" });
+  async function enableDefault(slug) {
     try {
       return await enable(slug);
+    } catch (e) {
+      if (!String(e.message).includes("不在目录中")) throw e;
+      // 还不在目录:先加入目录再启用(后端 _find 有配置回退,无竞态)
+      await xhr("POST", "/api/extra", { source: slug, org: "", name: "" });
+      return enable(slug);
+    }
+  }
+
+  async function addAndEnable(slug) {
+    try {
+      return await enableDefault(slug);
     } catch (e) {
       if (String(e.message).includes("无默认目标")) {
         // 没配 default_org:列出面板组织让用户选一次
@@ -141,6 +154,38 @@
     }
     #ghmirror-toast.err { border-color: #f85149; }
     #ghmirror-toast.out { opacity: 0; transform: translateY(6px); }
+    #ghmirror-dialog {
+      border: none; border-radius: 12px; padding: 0; max-width: 380px; width: 90vw;
+      color: var(--color-fg-default, #e6edf3);
+      background: var(--color-canvas-default, #0d1117);
+      box-shadow: 0 16px 48px rgba(1,4,9,.5);
+    }
+    #ghmirror-dialog::backdrop { background: rgba(1,4,9,.55); }
+    #ghmirror-dialog .ghm-form { padding: 16px 18px 14px; }
+    #ghmirror-dialog .ghm-title { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+    #ghmirror-dialog .ghm-sub {
+      margin: 0 0 12px; font-size: 12px;
+      color: var(--color-fg-muted, #818b98); word-break: break-all;
+    }
+    #ghmirror-dialog .ghm-field { margin-bottom: 12px; }
+    #ghmirror-dialog .ghm-field label { display: block; font-size: 12px; font-weight: 500; margin-bottom: 4px; }
+    #ghmirror-dialog select, #ghmirror-dialog input {
+      width: 100%; padding: 5px 8px; font-size: 13px;
+      border: 1px solid var(--color-border-default, #3d444d); border-radius: 6px;
+      background: var(--color-canvas-subtle, #151b23); color: inherit;
+    }
+    #ghmirror-dialog .ghm-hint { font-size: 11.5px; color: var(--color-fg-muted, #818b98); margin: -6px 0 10px; }
+    #ghmirror-dialog .ghm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    #ghmirror-dialog .ghm-btn-primary {
+      background: #1f883d; color: #fff; border: none; border-radius: 6px;
+      padding: 5px 14px; font-size: 13px; font-weight: 500; cursor: pointer;
+    }
+    #ghmirror-dialog .ghm-btn-primary:disabled { opacity: .6; }
+    #ghmirror-dialog .ghm-btn-plain {
+      background: var(--color-btn-bg, #212830); color: var(--color-fg-default, #e6edf3);
+      border: 1px solid var(--color-btn-border, #3d444d); border-radius: 6px;
+      padding: 5px 14px; font-size: 13px; cursor: pointer;
+    }
   `;
 
   function ensureStyles() {
@@ -213,26 +258,121 @@
   async function onButtonClick(btn, slug) {
     const state = btn._state;
     if (!state) return;
+    if (state === "unreachable") { refreshBtn(btn, slug); return; } // 点击 = 重试
+    if (state === "absent" || state === "disabled") { openDialog(btn, slug, state); return; }
+    // ok / missing / failed:一键同步(建拉一体)
     setBtn(btn, { cls: "ghm-off", label: "请求中…", disabled: true });
     try {
-      let msg;
-      if (state === "unreachable" || state === "absent" || state === "disabled") {
+      const giteaFull = btn._item ? btn._item.gitea_full : "";
+      if (!giteaFull) throw new Error("未启用,先启用同步");
+      const r = await sync(slug, giteaFull);
+      toast(`${giteaFull}:${r.detail || "已同步"}`);
+    } catch (e) {
+      toast(`${slug} 操作失败:${e.message}`, true);
+    }
+    stateCache.delete(slug); // 动作后让缓存失效,立即拿最新状态
+    refreshBtn(btn, slug);
+  }
+
+  /* ---------- 添加/启用弹窗(与面板「添加仓库」一致的选择) ---------- */
+
+  const DLG_ID = "ghmirror-dialog";
+  const OPT_DEFAULT = "__default__";
+  const OPT_NONE = "__none__";
+
+  function ensureDialog() {
+    let dlg = document.getElementById(DLG_ID);
+    if (dlg) return dlg;
+    dlg = document.createElement("dialog");
+    dlg.id = DLG_ID;
+    dlg.innerHTML = `
+      <form method="dialog" class="ghm-form">
+        <p class="ghm-title">加入 gh-mirror 同步</p>
+        <p class="ghm-sub" data-role="slug"></p>
+        <div class="ghm-field">
+          <label>目标组织</label>
+          <select data-role="org" disabled><option>加载中…</option></select>
+          <p class="ghm-hint" data-role="org-hint"></p>
+        </div>
+        <div class="ghm-field" data-role="name-field">
+          <label>目标仓库名(可选)</label>
+          <input data-role="name" placeholder="默认与来源同名" maxlength="100">
+        </div>
+        <div class="ghm-actions">
+          <button type="submit" value="cancel" class="ghm-btn-plain">取消</button>
+          <button type="submit" value="ok" class="ghm-btn-primary" disabled>启用同步</button>
+        </div>
+      </form>`;
+    document.body.appendChild(dlg);
+    dlg.addEventListener("close", () => onDialogClose(dlg));
+    return dlg;
+  }
+
+  function openDialog(btn, slug, state) {
+    const dlg = ensureDialog();
+    dlg.querySelector('[data-role="slug"]').textContent = slug;
+    dlg.querySelector('[data-role="name-field"]').style.display =
+      state === "absent" ? "" : "none";
+    dlg.querySelector('[data-role="name"]').value = "";
+    const okBtn = dlg.querySelector('[value="ok"]');
+    okBtn.textContent = state === "absent" ? "加入并同步" : "启用同步";
+    okBtn.disabled = true;
+    const orgSel = dlg.querySelector('[data-role="org"]');
+    orgSel.disabled = true;
+    orgSel.innerHTML = "<option>加载中…</option>";
+    dlg.querySelector('[data-role="org-hint"]').textContent = "";
+    dlg._ctx = { btn, slug, state };
+    if (!dlg.open) dlg.showModal();
+    Promise.all([xhr("GET", "/api/orgs"), xhr("GET", "/api/status")])
+      .then(([orgs, st]) => {
+        const managed = orgs.filter((o) => o.managed !== false).map((o) => o.name);
+        const def = st.orgs && st.orgs.default;
+        let opts = `<option value="${OPT_DEFAULT}">默认规则${def ? `(→ ${esc(def)})` : "(面板未设默认组织)"}</option>`;
+        opts += managed.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
         if (state === "absent") {
-          msg = await addAndEnable(slug);
-        } else {
-          msg = await enable(slug);
+          opts += `<option value="${OPT_NONE}">仅加入目录,暂不同步</option>`;
         }
-        // 回读拿实际目标组织,提示更直观
-        try {
-          const item = await fetchState(slug);
-          if (item && item.org) msg = `已启用 → ${item.org}`;
-        } catch (_) {}
-        toast(`${slug}:${msg},后台创建镜像中`);
-      } else if (state === "ok" || state === "missing" || state === "failed") {
-        const giteaFull = btn._item ? btn._item.gitea_full : "";
-        if (!giteaFull) throw new Error("未启用,先启用同步");
-        const r = await sync(slug, giteaFull);
-        toast(`${giteaFull}:${r.detail || "已同步"}`);
+        orgSel.innerHTML = opts;
+        orgSel.disabled = false;
+        okBtn.disabled = false;
+        dlg.querySelector('[data-role="org-hint"]').textContent =
+          "GitHub 用 owner/repo 形式(含 issues/PR 等元数据迁移)";
+      })
+      .catch((e) => {
+        dlg.close();
+        toast("读取面板组织失败:" + e.message, true);
+        refreshBtn(btn, slug);
+      });
+  }
+
+  async function onDialogClose(dlg) {
+    if (dlg.returnValue !== "ok") return; // 取消 / Esc
+    const ctx = dlg._ctx;
+    if (!ctx) return;
+    const { btn, slug, state } = ctx;
+    const org = dlg.querySelector('[data-role="org"]').value;
+    const name = dlg.querySelector('[data-role="name"]').value.trim();
+    setBtn(btn, { cls: "ghm-off", label: "请求中…", disabled: true });
+    try {
+      if (state === "absent") {
+        if (org === OPT_NONE) {
+          await xhr("POST", "/api/extra", { source: slug, org: "", name });
+          toast(`${slug}:已加入目录(暂不同步)`);
+        } else if (org === OPT_DEFAULT) {
+          await addAndEnable(slug); // 默认规则(未设默认组织时现场选择)
+          toast(`${slug}:已按默认规则启用,后台创建镜像中`);
+        } else {
+          await xhr("POST", "/api/extra", { source: slug, org, name });
+          toast(`${slug}:已加入并启用 → ${org},后台创建镜像中`);
+        }
+      } else { // disabled:已在目录,选组织启用
+        if (org === OPT_DEFAULT) {
+          await addAndEnable(slug);
+          toast(`${slug}:已按默认规则启用,后台创建镜像中`);
+        } else {
+          await enable(slug, org);
+          toast(`${slug}:已启用 → ${org},后台创建镜像中`);
+        }
       }
     } catch (e) {
       toast(`${slug} 操作失败:${e.message}`, true);
