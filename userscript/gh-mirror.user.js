@@ -1,8 +1,10 @@
 // ==UserScript==
 // @name         gh-mirror 一键同步
-// @namespace    https://github.com/gh-mirror
-// @version      1.2.0
+// @namespace    https://github.com/RavenHogWarts/gh-mirror
+// @version      1.2.1
 // @description  在 GitHub 仓库页一键加入 gh-mirror 目录 / 启用同步 / 立即拉取,状态实时显示
+// @author       RavenHogwarts
+// @homepageURL  https://github.com/RavenHogWarts/gh-mirror
 // @match        https://github.com/*
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest
@@ -15,7 +17,9 @@
 // ==/UserScript==
 
 /* 面板地址默认 http://localhost:13655;用 Tampermonkey 菜单「gh-mirror:设置面板地址」修改。
-   面板部署在其他域名时,需在脚本头部 @connect 里追加该域名。 */
+   面板部署在其他域名时,需在脚本头部 @connect 里追加该域名。
+   发布:随 main 分支,改好头部 @version 推送 main 即发版;不写 @updateURL/@downloadURL,
+   Tampermonkey 以安装源 URL 检查更新,@version 变大自然升级。 */
 
 "use strict";
 

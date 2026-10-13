@@ -106,9 +106,17 @@ token(GitHub PAT 在 https://github.com/settings/tokens 生成,勾 `repo`,镜像
 - 按钮悬停可看镜像位置 / 失败原因;操作结果以 Toast 提示
 - 启用时若面板没配默认组织,会列出面板组织让你现场选一个
 
-安装:Tampermonkey → 新建脚本 → 粘贴 `userscript/gh-mirror.user.js` 全文保存;
+安装:浏览器打开下面的安装链接,Tampermonkey 弹出确认页装完即自动更新——
+脚本随 main 分支发布,`@version` 推上 main 就是发版,已安装用户由 Tampermonkey
+例行检查后自动升级:
+
+- 官方源:<https://raw.githubusercontent.com/RavenHogWarts/gh-mirror/main/userscript/gh-mirror.user.js>
+- 国内 raw 打不开时用 jsDelivr 镜像(缓存最长约 12h,新版到账略延迟):
+  <https://fastly.jsdelivr.net/gh/RavenHogWarts/gh-mirror@main/userscript/gh-mirror.user.js>
+
 默认面板地址 `http://localhost:13655`,用油猴菜单「gh-mirror:设置面板地址」修改
 (面板不在本机时需在脚本头部 `@connect` 追加对应域名)。
+旧版手动粘贴安装的:删掉旧脚本,从上面链接重装一次,即纳入自动更新。
 
 > 选择油猴脚本而非浏览器扩展:单文件零构建,`GM_xmlhttpRequest` 在扩展上下文发请求,
 > 天然绕过 CORS / 私网访问限制,面板零改动;需要右键菜单 / 弹出窗时再升级扩展,
@@ -249,6 +257,8 @@ git tag v0.3.0 && git push origin v0.3.0
 - CI 在 GitHub 海外 runner 构建,显式覆盖 Dockerfile 的国内源默认值
   (官方 python 基础镜像 + 官方 PyPI);本地构建行为不变
 - Actions 页也可选某个已有 tag 手动 `workflow_dispatch` 补跑;选分支触发则只构建自检、不推送
+- 油猴脚本**不走此流程**:随 main 分支发布,bump 脚本头 `@version` 推送 main 即发版
+  (安装链接见上文「浏览器脚本」一节)
 - **首次发布后**:GitHub → 个人页 Packages → gh-mirror → Package settings →
   Change visibility 设为 **public**,否则匿名 `docker pull` 会 401
   (私有期间拉取方需 `docker login ghcr.io` 用 GitHub PAT)
