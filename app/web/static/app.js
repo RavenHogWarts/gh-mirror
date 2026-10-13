@@ -68,6 +68,7 @@ const ICONS = {
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+  external: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
 };
 
 const icon = (name) =>
@@ -505,7 +506,7 @@ function renderRepos() {
   // 数据指纹:内容没变就不重建 DOM(轮询每 4s 一次,重建会打断悬停/滚动/选择)
   const key = JSON.stringify([
     rows.map((r) => [r.full_name, r.status, r.org, r.mirrored, r.gitea_updated,
-                     r.error, r.mirror_full, r.default_target]),
+                     r.error, r.mirror_full, r.default_target, r.gitea_full]),
     [...state.checked].sort(), state.sort.key, state.sort.dir,
     state.filter, state.filterStatus, state.filterOrigin, state.giteaUrl,
   ]);
@@ -561,6 +562,11 @@ function renderRepos() {
     }
     // 更新列:启用→镜像链接;未启用但有遗留镜像→遗留镜像链接
     const loc = ok ? r.gitea_full : r.mirror_full;
+    // 仓库名:有镜像 → 跳 Gitea 镜像(旁附上游小图标);无镜像 → 跳 GitHub 原仓库
+    const nameTd = loc
+      ? `<td><a class="repo-name" href="${esc(state.giteaUrl + "/" + loc)}" target="_blank" rel="noopener" title="打开 Gitea 镜像 ${esc(loc)}">${esc(r.full_name)}</a>` +
+        `<a class="src-ic link" href="${esc(r.html_url)}" target="_blank" rel="noopener" title="上游仓库" aria-label="上游仓库">${icon("external")}</a></td>`
+      : `<td><a class="repo-name" href="${esc(r.html_url)}" target="_blank" rel="noopener">${esc(r.full_name)}</a></td>`;
     const updatedTd = loc
       ? `<td title="${esc(fmtTime(r.gitea_updated))}${disabled ? "\n遗留镜像:面板未管理,Gitea 仍按间隔拉取" : ""}">
           <a href="${esc(state.giteaUrl + "/" + loc)}" target="_blank" rel="noopener">${relTime(r.gitea_updated)}</a>
@@ -570,7 +576,7 @@ function renderRepos() {
     const rowSel = state.checked.has(r.full_name) ? ' class="selected"' : "";
     return `<tr${rowSel}>
       <td class="col-check">${cb}</td>
-      <td><a class="repo-name" href="${esc(r.html_url)}" target="_blank" rel="noopener">${esc(r.full_name)}</a></td>
+      ${nameTd}
       <td>${origin}${marks}</td>
       <td>${orgSel}</td>
       <td>${chip}</td>

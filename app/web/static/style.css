@@ -562,6 +562,9 @@ th[aria-sort="descending"] .sort-ind::after { content: "↓"; color: var(--accen
 .src-ic .ic { width: 13px; height: 13px; }
 .src-ic.fork { color: var(--warn); }
 .src-ic.lock { color: var(--warn); }
+/* 仓库名旁的上游仓库小图标链接 */
+a.src-ic.link { color: var(--muted); transition: color 0.15s, background 0.15s; }
+a.src-ic.link:hover { color: var(--accent); background: var(--accent-soft); text-decoration: none; }
 .src-note { color: var(--faint); font-size: 12px; }
 
 /* 状态徽章:图标 + 文字(不只靠颜色) */
