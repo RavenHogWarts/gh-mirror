@@ -316,6 +316,9 @@ main { padding-bottom: 90px; } /* 给浮动批量栏留空间 */
   box-shadow: var(--shadow-md);
 }
 
+/* 组织面板例外:卡片下拉菜单需要越过面板边界显示(会被 overflow 裁掉) */
+#org-panel { overflow: visible; }
+
 .panel-head {
   display: flex;
   justify-content: space-between;
@@ -431,6 +434,8 @@ main { padding-bottom: 90px; } /* 给浮动批量栏留空间 */
 .menu button:disabled { color: var(--faint); cursor: not-allowed; }
 .menu button:disabled:hover { background: none; }
 .menu hr { border: none; border-top: 1px solid var(--border-muted); margin: 4px 2px; }
+/* 视口底部放不下时向上展开(JS 按位置切换) */
+.menu.up { top: auto; bottom: calc(100% + 4px); }
 
 /* ---------------- 工具栏(搜索 + 状态/来源两行筛选) ---------------- */
 

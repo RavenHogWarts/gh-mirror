@@ -234,7 +234,10 @@ function isTyping() {
 /* ---------- 下拉菜单(组织卡片) ---------- */
 
 function closeAllMenus() {
-  document.querySelectorAll(".menu:not(.hidden)").forEach((m) => m.classList.add("hidden"));
+  document.querySelectorAll(".menu:not(.hidden)").forEach((m) => {
+    m.classList.add("hidden");
+    m.classList.remove("up");
+  });
 }
 document.addEventListener("click", (ev) => {
   if (ev.target.closest(".org-menu-wrap")) return;
@@ -405,7 +408,12 @@ $("org-list").addEventListener("click", async (ev) => {
     const menu = menuBtn.parentElement.querySelector(".menu");
     const wasOpen = !menu.classList.contains("hidden");
     closeAllMenus();
-    if (!wasOpen) menu.classList.remove("hidden");
+    if (!wasOpen) {
+      menu.classList.remove("hidden");
+      // 靠近视口底部放不下时改为向上展开,避免被视口/面板边缘裁掉
+      const rect = menu.getBoundingClientRect();
+      if (rect.bottom > window.innerHeight - 8) menu.classList.add("up");
+    }
     return;
   }
   const del = ev.target.closest("button[data-org-del]");
