@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gh-mirror · GitHub 备份镜像面板</title>
+<script>
+/* 主题先行:避免刷新时闪错色(默认跟随系统,手动切换后记忆) */
+(function () {
+  var t = "dark";
+  try { t = localStorage.getItem("theme") || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"); } catch (e) {}
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+    </span>
+    <div class="brand-text">
+      <h1>gh-mirror</h1>
+      <span class="sub">GitHub → Gitea 镜像备份</span>
+    </div>
+  </div>
+  <div class="top-actions">
+    <span id="running-badge" class="pill hidden" role="status">
+      <span class="spinner" aria-hidden="true"></span>对账中…
+    </span>
+    <button id="btn-reconcile" class="btn primary">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+      立即对账
+    </button>
+    <button id="btn-backup" class="btn hidden" title="执行备份命令(在设置中配置)">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>
+      <span>立即备份</span>
+    </button>
+    <button id="btn-theme" class="icon-btn" aria-label="切换亮暗主题"></button>
+    <button id="btn-settings" class="btn">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>
+      设置
+    </button>
+    <a class="btn" href="/api/docs" target="_blank" rel="noopener">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+      API
+    </a>
+  </div>
+</header>
+
+<div id="banner" class="banner hidden" role="alert"></div>
+
+<main>
+<section class="cards" id="cards" aria-label="状态总览">
+  <div class="card" id="card-github">
+    <div class="card-title">GitHub</div>
+    <div class="card-value" id="v-gh-user">—</div>
+    <div class="card-note" id="v-gh-note">API 余量 —</div>
+  </div>
+  <div class="card" id="card-gitea">
+    <div class="card-title">Gitea</div>
+    <div class="card-value" id="v-gitea-url">—</div>
+    <div class="card-note" id="v-gitea-note">用户 —</div>
+  </div>
+  <div class="card">
+    <div class="card-title">镜像覆盖</div>
+    <div class="card-value"><span id="v-mirrored">0</span> 已镜像 · <span id="v-enabled">0</span> 已启用</div>
+    <div class="card-note">目录 <span id="v-total">0</span> · 待补 <span id="v-missing">0</span> · 失败 <span id="v-failed">0</span> · 未启用 <span id="v-disabled">0</span></div>
+  </div>
+  <div class="card">
+    <div class="card-title">组织 / 对账</div>
+    <div class="card-value"><span id="v-orgs">0</span> 个组织 · 默认 <span id="v-default-org">—</span></div>
+    <div class="card-note">上次 <span id="v-last">尚未运行</span> · 下次 <span id="v-next">—</span></div>
+  </div>
+</section>
+
+<section class="panel" id="org-panel">
+  <div class="panel-head">
+    <div class="panel-title">
+      <h2>组织</h2><span class="panel-desc">镜像的分类与归属,仓库一律镜像进组织</span>
+    </div>
+    <button id="btn-org-new" class="btn primary">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+      新建组织
+    </button>
+  </div>
+  <div id="org-list" class="org-grid"></div>
+</section>
+
+<section class="panel" id="repos-panel">
+  <div class="panel-head">
+    <div class="panel-title">
+      <h2>仓库</h2><span id="repo-count-note" class="panel-desc"></span>
+    </div>
+    <button id="btn-repo-add" class="btn primary">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+      添加仓库
+    </button>
+  </div>
+  <div class="toolbar">
+    <div class="toolbar-row">
+      <div class="search">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <input id="filter" placeholder="搜索仓库…(按 / 聚焦)" autocomplete="off" aria-label="按仓库名过滤">
+      </div>
+      <span class="last-refresh" id="last-refresh"></span>
+    </div>
+    <div class="toolbar-row">
+      <span class="filter-label">状态</span>
+      <div class="chip-filters" id="status-filters" role="group" aria-label="按状态过滤"></div>
+    </div>
+    <div class="toolbar-row">
+      <span class="filter-label">来源</span>
+      <div class="chip-filters" id="origin-filters" role="group" aria-label="按来源过滤"></div>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th class="col-check"><input type="checkbox" id="check-all" title="全选(当前过滤结果)" aria-label="全选"></th>
+          <th class="th-sort" data-sortkey="name" aria-sort="none">仓库<span class="sort-ind" aria-hidden="true"></span></th>
+          <th>来源</th>
+          <th>组织</th>
+          <th class="th-sort" data-sortkey="status" aria-sort="none">镜像状态<span class="sort-ind" aria-hidden="true"></span></th>
+          <th class="th-sort" data-sortkey="updated" aria-sort="none">Gitea 更新<span class="sort-ind" aria-hidden="true"></span></th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="repo-body">
+        <tr><td colspan="7" class="empty">加载中…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <details id="orphan-box">
+    <summary>
+      <span class="summary-caret" aria-hidden="true">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </span>
+      孤儿镜像<span id="orphan-count" class="count-badge">0</span>
+      <span class="panel-desc">上游已删或已移出管理</span>
+    </summary>
+    <div class="orphan-tools">
+      <span class="hint">不属于预期集合的镜像(数据完好)。选中后可批量删除。</span>
+      <span id="orphan-bulk" class="orphan-bulk hidden">
+        已选 <b id="orphan-sel-n">0</b>
+        <button id="orphan-bulk-del" class="btn danger sm">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          删除所选
+        </button>
+      </span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th class="col-check"><input type="checkbox" id="orphan-check-all" aria-label="全选孤儿"></th>
+          <th>Gitea 仓库</th><th>最近更新</th><th>操作</th>
+        </tr></thead>
+        <tbody id="orphan-body">
+          <tr><td colspan="4" class="empty">无孤儿镜像</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="hint pad">上游仓库被删除后会出现在这里(数据完好)。想停止每轮的失败重试:在 Gitea
+      网页 Settings → Danger Zone → Convert to Regular Repository(API 不支持,需手动)。</p>
+  </details>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <div class="panel-title"><h2>日志</h2></div>
+    <div class="log-tools">
+      <button id="log-errors" class="chip-btn" aria-pressed="false" title="只显示警告和错误">仅异常</button>
+      <button id="log-bottom" class="chip-btn hidden" title="滚动到最新日志">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
+        最新
+      </button>
+    </div>
+  </div>
+  <pre id="logs" aria-live="polite">—</pre>
+</section>
+</main>
+
+<footer>
+  gh-mirror · 本地工具,请勿暴露到公网 · 配置存于数据卷,网页修改即时生效 ·
+  <a href="/api/config" target="_blank" rel="noopener">当前配置(脱敏)</a>
+</footer>
+
+<!-- 浮动批量操作栏:选中仓库后出现 -->
+<div id="bulk-bar" class="bulk-bar hidden" role="toolbar" aria-label="批量操作">
+  <span class="bulk-count">已选 <b id="bulk-n">0</b></span>
+  <button id="bulk-enable" class="btn sm" title="按默认规则启用:自己/组织仓库→同名组织(或映射),Star/手动→默认组织;组织不存在会自动创建">
+    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+    启用
+  </button>
+  <div class="bulk-action">
+    <select id="bulk-org" aria-label="目标组织"></select>
+    <button id="bulk-assign" class="btn sm" title="把所选仓库指到该组织:未启用的启用,已镜像的即时转移">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+      移到该组织
+    </button>
+  </div>
+  <span class="bulk-sep" aria-hidden="true"></span>
+  <button id="bulk-sync" class="btn sm" title="立即同步所选:已有镜像→拉取;没有→当场创建">
+    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+    同步
+  </button>
+  <button id="bulk-unassign" class="btn sm" title="仅取消启用计划(未镜像的仓库才能设为未分配)">
+    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 12H3"/><path d="M17 6H3"/><path d="M21 18h-6"/></svg>
+    设为未分配
+  </button>
+  <button id="bulk-stop" class="btn outline-danger sm" title="停止同步:镜像保留在 Gitea 自行拉取,面板不再管理">
+    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></svg>
+    停止同步
+  </button>
+  <button id="bulk-delete" class="btn danger sm" title="删除 Gitea 侧镜像(不可恢复)">
+    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+    删除镜像
+  </button>
+  <button id="bulk-clear" class="icon-btn" aria-label="取消选择">
+    <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+  </button>
+</div>
+
+<!-- 弹窗:新建组织 -->
+<div id="modal-org-new" class="overlay hidden">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="org-new-title">
+    <div class="modal-head">
+      <h2 id="org-new-title">新建组织</h2>
+      <button class="icon-btn modal-close" aria-label="关闭">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <p class="modal-note">组织即分类(personal / work / third-party…),在 Gitea 中创建为私有组织。</p>
+    <form id="org-new-form" novalidate>
+      <label class="field">
+        <span class="field-label">组织名 <em>*</em></span>
+        <input type="text" id="org-new-name" maxlength="39" placeholder="如 personal" autocomplete="off" required>
+        <span class="field-hint">字母 / 数字 / 连字符,最长 39 字符</span>
+      </label>
+      <label class="field">
+        <span class="field-label">描述(可选)</span>
+        <input type="text" id="org-new-desc" placeholder="如 自己的项目" maxlength="100">
+      </label>
+      <p class="form-err hidden" id="org-new-err" role="alert"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn modal-close">取消</button>
+        <button type="submit" class="btn primary">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+          创建
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- 弹窗:添加仓库 -->
+<div id="modal-repo-add" class="overlay hidden">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="repo-add-title">
+    <div class="modal-head">
+      <h2 id="repo-add-title">添加仓库</h2>
+      <button class="icon-btn modal-close" aria-label="关闭">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <p class="modal-note">加入手动镜像清单,保存后立即对账创建。</p>
+    <form id="repo-add-form" novalidate>
+      <label class="field">
+        <span class="field-label">来源 <em>*</em></span>
+        <input type="text" id="repo-add-source" placeholder="owner/repo 或 https://…/repo.git" autocomplete="off" required>
+        <span class="field-hint">GitHub 用 owner/repo(含 issues/PR 等元数据迁移);其他公开 git 地址用完整 URL(仅镜像代码)</span>
+      </label>
+      <label class="field">
+        <span class="field-label">目标组织(可选,留空 = 仅加入目录暂不同步)</span>
+        <select id="repo-add-org"></select>
+        <span class="field-hint" id="repo-add-org-hint"></span>
+      </label>
+      <label class="field">
+        <span class="field-label">目标仓库名(可选)</span>
+        <input type="text" id="repo-add-name" placeholder="默认与来源同名" maxlength="100" autocomplete="off">
+      </label>
+      <p class="form-err hidden" id="repo-add-err" role="alert"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn modal-close">取消</button>
+        <button type="submit" class="btn primary">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+          添加
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- 弹窗:组织改名 -->
+<div id="modal-org-rename" class="overlay hidden">
+  <div class="modal modal-sm" role="dialog" aria-modal="true" aria-labelledby="rename-title">
+    <div class="modal-head">
+      <h2 id="rename-title">组织改名</h2>
+      <button class="icon-btn modal-close" aria-label="关闭">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <p class="modal-note">仓库自动转移,所有引用(默认组织/指派/映射/手动清单)同步更新。</p>
+    <form id="rename-form" novalidate>
+      <label class="field">
+        <span class="field-label">当前名称</span>
+        <input type="text" id="rename-old" disabled>
+      </label>
+      <label class="field">
+        <span class="field-label">新名称 <em>*</em></span>
+        <input type="text" id="rename-new" maxlength="39" autocomplete="off" required>
+      </label>
+      <p class="form-err hidden" id="rename-err" role="alert"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn modal-close">取消</button>
+        <button type="submit" class="btn primary">改名</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- 弹窗:编辑组织描述 -->
+<div id="modal-org-desc" class="overlay hidden">
+  <div class="modal modal-sm" role="dialog" aria-modal="true" aria-labelledby="desc-title">
+    <div class="modal-head">
+      <h2 id="desc-title">编辑组织描述</h2>
+      <button class="icon-btn modal-close" aria-label="关闭">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <form id="desc-form" novalidate>
+      <label class="field">
+        <span class="field-label">组织</span>
+        <input type="text" id="desc-org" disabled>
+      </label>
+      <label class="field">
+        <span class="field-label">描述</span>
+        <textarea id="desc-text" rows="3" maxlength="100" placeholder="这个组织用来…"></textarea>
+      </label>
+      <p class="form-err hidden" id="desc-err" role="alert"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn modal-close">取消</button>
+        <button type="submit" class="btn primary">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- 弹窗:设置 -->
+<div id="modal-settings" class="overlay hidden">
+  <div class="modal modal-lg" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="modal-head">
+      <h2 id="settings-title">设置</h2>
+      <button class="icon-btn modal-close" aria-label="关闭">
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <p class="modal-note">保存后即时生效(无需重启容器)。token 只写不回显:留空 = 保持不变。</p>
+    <form id="settings-form">
+      <fieldset>
+        <legend>GitHub</legend>
+        <label class="field"><span class="field-label">访问令牌 (PAT)</span>
+          <input type="password" id="set-gh-token" autocomplete="new-password" placeholder="未设置"></label>
+        <label class="field"><span class="field-label">额外纳入目录的 GitHub 组织(逗号分隔)</span>
+          <input type="text" id="set-orgs" placeholder="org1, org2"></label>
+        <label class="check"><input type="checkbox" id="set-forks" checked> 包含 fork 的仓库</label>
+        <label class="check"><input type="checkbox" id="set-stars" checked> 把 Star 列表拉进目录(仅展示,不会自动同步)</label>
+      </fieldset>
+      <fieldset>
+        <legend>Gitea</legend>
+        <label class="field"><span class="field-label">API 地址(容器编排内为 http://gitea:3000)</span>
+          <input type="text" id="set-gitea-url" placeholder="http://localhost:13654"></label>
+        <label class="field"><span class="field-label">浏览器可达地址(留空同 API 地址)</span>
+          <input type="text" id="set-gitea-public" placeholder="http://localhost:13654"></label>
+        <label class="field"><span class="field-label">访问令牌(需 repository+organization+user 读权限)</span>
+          <input type="password" id="set-gitea-token" autocomplete="new-password" placeholder="未设置"></label>
+      </fieldset>
+      <fieldset>
+        <legend>启用同步的默认目标</legend>
+        <label class="field"><span class="field-label">Star / 手动仓库的默认组织(可选;自己与组织仓库默认进同名组织)</span>
+          <select id="set-default-org"></select></label>
+        <label class="field"><span class="field-label">GitHub 组织 → Gitea 组织(启用该组织仓库时的默认目标,缺省同名;每行 myghorg=mygiteaorg)</span>
+          <textarea id="set-routes" rows="3" placeholder="myworkgh=work"></textarea></label>
+      </fieldset>
+      <fieldset>
+        <legend>行为</legend>
+        <label class="field"><span class="field-label">镜像同步间隔(形如 8h0m0s,下限 10m)</span>
+          <input type="text" id="set-interval" value="8h0m0s"></label>
+        <label class="field"><span class="field-label">自动对账周期(分钟,0 = 仅手动)</span>
+          <input type="number" id="set-every" min="0" value="60"></label>
+        <label class="field"><span class="field-label">备份命令(可选,如 docker exec … gitea dump)</span>
+          <input type="text" id="set-backup" placeholder="留空则隐藏备份按钮"></label>
+      </fieldset>
+      <div class="modal-actions">
+        <span id="settings-msg" role="alert"></span>
+        <button type="button" class="btn modal-close">取消</button>
+        <button type="submit" id="settings-save" class="btn primary">保存</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- 弹窗:危险操作确认 -->
+<div id="modal-confirm" class="overlay hidden">
+  <div class="modal modal-sm modal-confirm" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-msg">
+    <div class="confirm-icon danger" id="confirm-icon" aria-hidden="true">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+    </div>
+    <h2 id="confirm-title"></h2>
+    <div id="confirm-msg" class="confirm-msg"></div>
+    <ul id="confirm-items" class="confirm-items hidden"></ul>
+    <div class="modal-actions">
+      <button type="button" id="confirm-cancel" class="btn">取消</button>
+      <button type="button" id="confirm-ok" class="btn danger">确认</button>
+    </div>
+  </div>
+</div>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
