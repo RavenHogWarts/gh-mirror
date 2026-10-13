@@ -60,6 +60,16 @@ cp .env.example .env          # 可以先不填,只留文件
 docker compose up -d --build  # Gitea :13654 + 面板 :13655 一起启动
 ```
 
+> 懒得本地构建:发布 tag 后 CI 会自动把镜像推到
+> `ghcr.io/ravenhogwarts/gh-mirror`(见文末「版本发布」),可直接:
+>
+> ```bash
+> docker compose pull mirror && docker compose up -d
+> ```
+>
+> ghcr.io 国内可能拉不动,失败就回到上面 `up -d --build` 的本地构建
+> (Dockerfile 默认国内源)。
+
 然后给 Gitea 建管理员、生成 token(用户名换成你自己的,后面 `.env` 的
 `GITEA_OWNER` 留空即默认用这个登录名):
 
@@ -222,6 +232,27 @@ Gitea 整站备份用官方 `gitea dump`。两种接法:
   不能小于它(可在 Gitea 的 app.ini `[mirror]` 调整)。
 - 面板无鉴权,只适合本机/内网,不要暴露公网。
 
+## 版本发布(维护者)
+
+推送 `v*` tag 自动触发 [.github/workflows/release.yml](.github/workflows/release.yml):
+构建多架构镜像(linux/amd64 + arm64)并推送到 ghcr.io。流程:
+
+```bash
+# 1) 对齐版本号:app/__init__.py 的 __version__ = "0.3.0"
+git commit -am "chore: release v0.3.0"
+# 2) 打 tag 并推送,CI 接管
+git tag v0.3.0 && git push origin v0.3.0
+```
+
+- **tag 必须与 `__version__` 一致**,CI 第一步就校验,不一致直接失败
+- 镜像 tag:`v0.3.0` → `0.3.0` / `0.3` / `latest`
+- CI 在 GitHub 海外 runner 构建,显式覆盖 Dockerfile 的国内源默认值
+  (官方 python 基础镜像 + 官方 PyPI);本地构建行为不变
+- Actions 页也可选某个已有 tag 手动 `workflow_dispatch` 补跑;选分支触发则只构建自检、不推送
+- **首次发布后**:GitHub → 个人页 Packages → gh-mirror → Package settings →
+  Change visibility 设为 **public**,否则匿名 `docker pull` 会 401
+  (私有期间拉取方需 `docker login ghcr.io` 用 GitHub PAT)
+
 ## 项目结构
 
 ```
@@ -233,4 +264,5 @@ app/
 ├── config.py        # 环境变量 + .env 加载
 └── web/static/      # 零构建前端(原生 JS)
 Dockerfile / docker-compose.yml / .env.example
+.github/workflows/release.yml  # 打 v* tag 自动发镜像到 ghcr
 ```
