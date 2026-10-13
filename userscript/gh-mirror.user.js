@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         gh-mirror 一键同步
 // @namespace    https://github.com/gh-mirror
-// @version      1.1.1
+// @version      1.2.0
 // @description  在 GitHub 仓库页一键加入 gh-mirror 目录 / 启用同步 / 立即拉取,状态实时显示
 // @match        https://github.com/*
 // @run-at       document-idle
@@ -148,46 +148,84 @@
     #${BTN_ID}:disabled { cursor: default; opacity: 0.7; }
     #ghmirror-toast {
       position: fixed; right: 20px; bottom: 20px; z-index: 99999;
-      max-width: 380px; padding: 10px 14px; border-radius: 8px;
+      max-width: 380px; padding: 10px 14px; border-radius: 7px;
       font: 13px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
-      color: #e6edf3; background: #212830; border: 1px solid #3d444d;
-      box-shadow: 0 8px 24px rgba(1,4,9,.4); word-break: break-all;
+      color: #1f2328; background: #ffffff;
+      border: 1px solid #1a7f37; border-left-width: 3px;
+      box-shadow: 0 8px 28px rgba(31,35,40,.2); word-break: break-all;
       transition: opacity .2s, transform .2s;
     }
-    #ghmirror-toast.err { border-color: #f85149; }
+    #ghmirror-toast.err { border-color: #cf222e; }
+    html[data-color-mode="dark"] #ghmirror-toast,
+    html[data-color-mode="auto"][data-dark-theme="dark"] #ghmirror-toast {
+      color: #e6edf3; background: #151b23;
+      border-color: #3fb950; box-shadow: 0 8px 28px rgba(1,4,9,.5);
+    }
+    html[data-color-mode="dark"] #ghmirror-toast.err,
+    html[data-color-mode="auto"][data-dark-theme="dark"] #ghmirror-toast.err { border-color: #f85149; }
     #ghmirror-toast.out { opacity: 0; transform: translateY(6px); }
+    /* 选择面板:与 gh-mirror 面板一致的设计令牌(亮/暗随 GitHub 主题) */
     #ghmirror-dialog {
-      border: none; border-radius: 12px; padding: 0; max-width: 380px; width: 90vw;
-      color: var(--color-fg-default, #e6edf3);
-      background: var(--color-canvas-default, #0d1117);
-      box-shadow: 0 16px 48px rgba(1,4,9,.5);
+      --ghm-bg: #ffffff; --ghm-field: #f6f8fa; --ghm-text: #1f2328;
+      --ghm-muted: #59636e; --ghm-faint: #818b98; --ghm-border: #d1d9e0;
+      --ghm-accent: #0969da; --ghm-accent-hover: #0860ca;
+      --ghm-ring: 0 0 0 3px rgba(9,105,218,.35);
+      --ghm-shadow: 0 8px 28px rgba(31,35,40,.2);
     }
-    #ghmirror-dialog::backdrop { background: rgba(1,4,9,.55); }
-    #ghmirror-dialog .ghm-form { padding: 16px 18px 14px; }
-    #ghmirror-dialog .ghm-title { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+    html[data-color-mode="dark"] #ghmirror-dialog,
+    html[data-color-mode="auto"][data-dark-theme="dark"] #ghmirror-dialog {
+      --ghm-bg: #151b23; --ghm-field: #0d1117; --ghm-text: #e6edf3;
+      --ghm-muted: #9198a1; --ghm-faint: #6e7681; --ghm-border: #3d444d;
+      --ghm-accent: #4493f8; --ghm-accent-hover: #6cb0ff;
+      --ghm-ring: 0 0 0 3px rgba(68,147,248,.4);
+      --ghm-shadow: 0 8px 28px rgba(1,4,9,.5);
+    }
+    #ghmirror-dialog {
+      border: 1px solid var(--ghm-border); border-radius: 14px; padding: 0;
+      max-width: 400px; width: 90vw; color: var(--ghm-text);
+      background: var(--ghm-bg); box-shadow: var(--ghm-shadow);
+    }
+    #ghmirror-dialog[open] { animation: ghm-modal-in .18s ease-out; }
+    @keyframes ghm-modal-in {
+      from { transform: translateY(8px) scale(.985); opacity: 0; }
+      to { transform: none; opacity: 1; }
+    }
+    #ghmirror-dialog::backdrop { background: rgba(1,4,9,.5); }
+    #ghmirror-dialog .ghm-form { padding: 18px 20px 16px; }
+    #ghmirror-dialog .ghm-title { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
     #ghmirror-dialog .ghm-sub {
-      margin: 0 0 12px; font-size: 12px;
-      color: var(--color-fg-muted, #818b98); word-break: break-all;
+      margin: 0 0 14px; font-size: 12px; color: var(--ghm-muted); word-break: break-all;
     }
-    #ghmirror-dialog .ghm-field { margin-bottom: 12px; }
-    #ghmirror-dialog .ghm-field label { display: block; font-size: 12px; font-weight: 500; margin-bottom: 4px; }
+    #ghmirror-dialog .ghm-field { margin-bottom: 13px; }
+    #ghmirror-dialog .ghm-field label {
+      display: block; font-size: 12.5px; font-weight: 500; margin-bottom: 5px;
+    }
     #ghmirror-dialog select, #ghmirror-dialog input {
-      width: 100%; padding: 5px 8px; font-size: 13px;
-      border: 1px solid var(--color-border-default, #3d444d); border-radius: 6px;
-      background: var(--color-canvas-subtle, #151b23); color: inherit;
+      width: 100%; padding: 7px 10px; font-size: 13px;
+      border: 1px solid var(--ghm-border); border-radius: 7px;
+      background: var(--ghm-field); color: inherit;
+      transition: border-color .15s, box-shadow .15s;
     }
-    #ghmirror-dialog .ghm-hint { font-size: 11.5px; color: var(--color-fg-muted, #818b98); margin: -6px 0 10px; }
-    #ghmirror-dialog .ghm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    #ghmirror-dialog select:focus, #ghmirror-dialog input:focus {
+      outline: none; border-color: var(--ghm-accent); box-shadow: var(--ghm-ring);
+    }
+    #ghmirror-dialog .ghm-hint {
+      font-size: 11.5px; color: var(--ghm-faint); margin: 5px 0 0;
+    }
+    #ghmirror-dialog .ghm-actions { display: flex; justify-content: flex-end; gap: 10px; }
     #ghmirror-dialog .ghm-btn-primary {
-      background: #1f883d; color: #fff; border: none; border-radius: 6px;
-      padding: 5px 14px; font-size: 13px; font-weight: 500; cursor: pointer;
+      background: var(--ghm-accent); color: #fff; border: none; border-radius: 7px;
+      padding: 6px 15px; font-size: 13px; font-weight: 500; cursor: pointer;
+      transition: background .15s;
     }
-    #ghmirror-dialog .ghm-btn-primary:disabled { opacity: .6; }
+    #ghmirror-dialog .ghm-btn-primary:hover { background: var(--ghm-accent-hover); }
+    #ghmirror-dialog .ghm-btn-primary:disabled { opacity: .5; cursor: not-allowed; }
     #ghmirror-dialog .ghm-btn-plain {
-      background: var(--color-btn-bg, #212830); color: var(--color-fg-default, #e6edf3);
-      border: 1px solid var(--color-btn-border, #3d444d); border-radius: 6px;
-      padding: 5px 14px; font-size: 13px; cursor: pointer;
+      background: var(--ghm-bg); color: var(--ghm-text);
+      border: 1px solid var(--ghm-border); border-radius: 7px;
+      padding: 6px 15px; font-size: 13px; cursor: pointer; transition: background .15s;
     }
+    #ghmirror-dialog .ghm-btn-plain:hover { background: var(--ghm-field); }
   `;
 
   function ensureStyles() {
