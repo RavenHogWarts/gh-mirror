@@ -328,7 +328,7 @@ function renderStatus(st) {
       : icon("sync") + " 立即对账";
   }
 
-  // 备份按钮:未配置则隐藏(README 约定),运行中显示进行时
+  // 备份按钮:未配置则隐藏(docs/operations.md 约定),运行中显示进行时
   const bk = $("btn-backup");
   const mode = st.backup.configured ? (st.backup.running ? "running" : "idle") : "off";
   if (_backupShown !== mode) {

@@ -1,5 +1,5 @@
 # 推送 v* 版本 tag 自动构建并发布 Docker 镜像到 GitHub Container Registry(ghcr.io)。
-# 发版流程(详见 README「版本发布」):
+# 发版流程(详见 docs/release.md):
 #   1. 对齐 app/__init__.py 的 __version__(下方校验步骤会核对,不一致直接失败)
 #   2. git tag vX.Y.Z && git push origin vX.Y.Z
 # 镜像 tag 规则:vX.Y.Z → X.Y.Z / X.Y / latest

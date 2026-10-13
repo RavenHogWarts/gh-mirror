@@ -31,7 +31,7 @@ services:
       - "13654:3000"   # 宿主机 13654 -> 容器 3000(如需对调端口,改冒号左边的数字)
 
   mirror:
-    # 预构建镜像:打 v* tag 后 CI 自动推到 ghcr(见 README「版本发布」)。
+    # 预构建镜像:打 v* tag 后 CI 自动推到 ghcr(见 docs/release.md)。
     # 保留 build:. —— up -d 默认本地构建;想用预构建镜像:docker compose pull mirror && up -d
     image: ghcr.io/ravenhogwarts/gh-mirror:latest
     build: .
