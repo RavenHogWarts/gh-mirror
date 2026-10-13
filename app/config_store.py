@@ -158,13 +158,19 @@ class ConfigStore:
 
     @staticmethod
     def _clean_known_mirrors(value) -> dict[str, str]:
-        """{full: "org/name"};轻度校验,坏的条目直接丢弃。"""
+        """{full: "org/name"};轻度校验,坏的条目直接丢弃。
+        key 同时支持 owner/repo 与任意 git URL(URL 来源的手动清单条目,
+        不能过 normalize_source,否则其位置永远无法记录、停止同步后镜像会被误判孤儿)。"""
         if not isinstance(value, dict):
             raise ConfigError("known_mirrors 应为对象")
         out = {}
         for full, loc in value.items():
+            full = str(full or "").strip()
             try:
-                f = normalize_source(full).lower()
+                if full.startswith(("http://", "https://")):
+                    f = full.rstrip("/").lower()
+                else:
+                    f = normalize_source(full).lower()
                 org, _, name = str(loc or "").strip("/").partition("/")
                 if org and name and "/" not in name:
                     out[f] = f"{org}/{name}"
