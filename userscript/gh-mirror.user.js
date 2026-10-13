@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         gh-mirror 一键同步
 // @namespace    https://github.com/gh-mirror
-// @version      1.0.0
+// @version      1.0.1
 // @description  在 GitHub 仓库页一键加入 gh-mirror 目录 / 启用同步 / 立即拉取,状态实时显示
 // @match        https://github.com/*
 // @run-at       document-idle
@@ -73,10 +73,18 @@
 
   /* ---------- 状态获取与动作 ---------- */
 
+  // 补挂(GitHub React 重渲染会移除注入节点)时避免重复请求,短缓存状态
+  const STATE_TTL = 15000;
+  const stateCache = new Map(); // slug -> {at, item}
+
   async function fetchState(slug) {
+    const hit = stateCache.get(slug);
+    if (hit && Date.now() - hit.at < STATE_TTL) return hit.item;
     const repos = await xhr("GET", "/api/repos");
     const low = slug.toLowerCase();
-    return repos.find((r) => r.full_name.toLowerCase() === low) || null;
+    const item = repos.find((r) => r.full_name.toLowerCase() === low) || null;
+    stateCache.set(slug, { at: Date.now(), item });
+    return item;
   }
 
   async function enable(slug, org) {
@@ -229,6 +237,7 @@
     } catch (e) {
       toast(`${slug} 操作失败:${e.message}`, true);
     }
+    stateCache.delete(slug); // 动作后让缓存失效,立即拿最新状态
     refreshBtn(btn, slug);
   }
 
@@ -254,16 +263,17 @@
     refreshBtn(btn, slug);
   }
 
-  /* ---------- 入口:处理 GitHub 的 pjax 局部导航 ---------- */
+  /* ---------- 入口:轮询补挂(处理 GitHub pjax 导航与 React 重渲染移除) ---------- */
 
   let lastPath = "";
   function tick() {
-    if (location.pathname === lastPath) return;
-    lastPath = location.pathname;
-    const old = document.getElementById(`${BTN_ID}-li`);
-    if (old) old.remove();
+    if (location.pathname !== lastPath) {
+      lastPath = location.pathname;
+      const old = document.getElementById(`${BTN_ID}-li`);
+      if (old) old.remove(); // 换页后旧按钮状态过期,先移除
+    }
     const slug = currentSlug();
-    if (slug) mount(slug);
+    if (slug) mount(slug); // 已存在时 mount 直接返回;被 React 重渲染移除则补挂
   }
 
   ensureStyles();
