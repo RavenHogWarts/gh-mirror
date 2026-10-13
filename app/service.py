@@ -705,6 +705,60 @@ class MirrorService:
                 return False, detail
         return True, "已指派"
 
+    async def assign_repos(self, raws: list[str], org: str) -> list[dict]:
+        """批量指派到同一组织:配置(指派/清单/已知位置)一次落盘,已有镜像逐个转移。
+        与逐条 assign_repo 结果语义一致,批量场景不再每仓两次全量校验+写盘。"""
+        assignments = dict(self.store.repo_assignments)
+        extras = [dict(e) for e in self.store.extra_repos]
+        known = dict(self.store.known_mirrors)
+        moves: list[tuple[str, str, dict]] = []  # (旧位置, 目标, 结果条目引用)
+        results: list[dict] = []
+        for raw in raws:
+            try:
+                full = raw if raw.startswith(("http://", "https://")) else normalize_source(raw)
+            except ConfigError as e:
+                results.append({"repo": str(raw), "ok": False, "detail": str(e)})
+                continue
+            item = self._find(full)
+            if item is None:
+                results.append({"repo": full, "ok": False, "detail": f"仓库不在目录中: {full}"})
+                continue
+            name = item["gitea_name"]
+            old_loc = item["gitea_full"] or item.get("mirror_full") or ""
+            if item["origin"] == "extra":
+                for i, e in enumerate(extras):
+                    if e["source"].lower() == full.lower():
+                        extras[i] = {**e, "org": org}
+            else:
+                assignments[full.lower()] = org
+            known[full.lower()] = f"{org}/{name}"
+            r = {"repo": full, "ok": True, "detail": "已指派"}
+            results.append(r)
+            if old_loc and old_loc.lower() != f"{org}/{name}".lower():
+                moves.append((old_loc, f"{org}/{name}", r))
+        if (assignments != self.store.repo_assignments
+                or extras != self.store.extra_repos
+                or known != self.store.known_mirrors):
+            try:
+                self.store.update({
+                    "repo_assignments": assignments,
+                    "extra_repos": extras,
+                    "known_mirrors": known,
+                })
+            except ConfigError as e:
+                return [{"repo": r["repo"], "ok": False, "detail": str(e)} for r in results]
+        # 配置就位后再转移已在别处的镜像(失败不回滚指派,下轮对账会按新位置处理)
+        for old_loc, target, r in moves:
+            old_org, _, name = old_loc.partition("/")
+            ok, detail = await self.gitea.transfer_repo(old_org, name, org)
+            if ok:
+                self.invalidate_gitea_cache()
+                self.log(f"✓ 已转移 {old_org}/{name} → {target}")
+            else:
+                r["ok"], r["detail"] = False, detail
+                self.log(f"✗ 转移 {old_loc} → {target} 失败:{detail}", "error")
+        return results
+
     async def stop_repos(self, repos: list[str]) -> dict:
         """停止同步(已镜像:保留镜像,记录位置)与设为未分配(未镜像:仅清指派)的统一入口。
         语义按每仓库当前状态自动区分,UI 负责把对应集合传进来。"""

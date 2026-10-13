@@ -343,13 +343,8 @@ async def api_assign_bulk(body: dict):
         raise HTTPException(422, "org 不能为空")
     if org.lower() not in {o["name"].lower() for o in store.orgs}:
         raise HTTPException(422, f"组织不存在: {org}(先创建)")
-    results = []
-    for full in repos:
-        try:
-            ok, detail = await svc.assign_repo(str(full), org)
-        except ConfigError as e:
-            ok, detail = False, str(e)
-        results.append({"repo": str(full), "ok": ok, "detail": detail})
+    # 批量路径:配置一次落盘(逐条则是每仓两次全量校验+写盘),转移逐个执行
+    results = await svc.assign_repos([str(r) for r in repos], org)
     assigned = sum(1 for r in results if r["ok"])
     svc.log(f"批量指派:成功 {assigned}/{len(results)} → {org}",
             "info" if assigned == len(results) else "warn")
