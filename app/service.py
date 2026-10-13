@@ -29,6 +29,18 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _fmt_elapsed(sec: float) -> str:
+    """秒数 → 紧凑时长(45s / 2m03s / 1h04m),用于迁移耗时输出。"""
+    sec = int(sec)
+    if sec < 60:
+        return f"{sec}s"
+    m, s = divmod(sec, 60)
+    if m < 60:
+        return f"{m}m{s:02d}s"
+    h, m = divmod(m, 60)
+    return f"{h}h{m:02d}m{s:02d}s"
+
+
 class MirrorService:
     def __init__(self, store: ConfigStore, gh: GitHubClient, gitea: GiteaClient):
         self.store = store
@@ -58,9 +70,39 @@ class MirrorService:
         # Star 列表缓存
         self._stars: list[GHRepo] = []
         self._stars_ts: float = 0.0
+        # 建镜像失败记录(full_name 小写 -> 错误信息)。对账/立即同步写入,
+        # 视图刷新时叠加为 failed 状态;镜像就位或条目停用时清除。
+        # 不放进视图字典接力:对账循环长达数分钟,期间视图会被轮询反复重建,
+        # 写在旧字典上的状态随时可能被丢弃。
+        self.failures: dict[str, str] = {}
+        # 批量操作进度(对账 / 批量同步):标题 + 计数 + 当前条目,status_payload 暴露给前端画进度条
+        self.progress: dict | None = None
+        self._progress_t0: float = 0.0
 
     def log(self, msg: str, level: str = "info") -> None:
         self.logs.append({"time": _now(), "level": level, "msg": msg})
+
+    # ---------------- 批量进度(状态卡片进度条) ----------------
+
+    def progress_begin(self, title: str, total: int) -> None:
+        self.progress = {"title": title, "total": total, "done": 0, "ok": 0,
+                         "failed": 0, "current": ""}
+        self._progress_t0 = time.monotonic()
+
+    def progress_total(self, total: int) -> None:
+        if self.progress is not None:
+            self.progress["total"] = total
+
+    def progress_step(self, current: str) -> None:
+        if self.progress is not None:
+            self.progress["current"] = current
+
+    def progress_tick(self, ok: bool) -> None:
+        if self.progress is None:
+            return
+        self.progress["done"] += 1
+        self.progress["ok" if ok else "failed"] += 1
+        self.progress["current"] = ""
 
     @property
     def backup_running(self) -> bool:
@@ -319,8 +361,10 @@ class MirrorService:
         # ---- 匹配:启用的看目标位置;未启用的看已知镜像位置(遗留镜像可见、不算孤儿) ----
         expected_keys: set[str] = set()
         for item in view.values():
+            full_low = item["full_name"].lower()
             if item["status"] == "disabled":
-                known_loc = self.store.known_mirrors.get(item["full_name"].lower(), "")
+                self.failures.pop(full_low, None)  # 未启用:失败记录随之失效
+                known_loc = self.store.known_mirrors.get(full_low, "")
                 if known_loc:
                     info = gitea_repos.get(known_loc.lower())
                     if info is not None:
@@ -335,6 +379,7 @@ class MirrorService:
             expected_keys.add(key)
             info = gitea_repos.get(key)
             if info is not None:
+                self.failures.pop(full_low, None)  # 镜像已就位,清除过期失败
                 item.update(
                     mirrored=True,
                     is_mirror=bool(info.get("mirror")),
@@ -342,11 +387,11 @@ class MirrorService:
                     status="ok",
                     error="",
                 )
-        # 保留上次对账的失败状态(Gitea 里确实没有时)
+        # 叠加失败记录:Gitea 里确实没有的已启用条目 -> failed
         for full, item in view.items():
-            old = self.repos.get(full)
-            if (old and old.get("status") == "failed" and item["status"] == "missing"):
-                item["status"], item["error"] = "failed", old["error"]
+            err = self.failures.get(full.lower())
+            if err is not None and item["status"] == "missing":
+                item["status"], item["error"] = "failed", err
 
         # ---- 已知镜像位置:随实际所见更新,并收敛到当前目录 ----
         new_known: dict[str, str] = {}
@@ -420,6 +465,27 @@ class MirrorService:
             private=item["private"],
         )
 
+    async def _migrate_logged(self, item: dict, prefix: str = "") -> tuple[bool, str]:
+        """建镜像并输出等待进度:Gitea migrate 是同步接口,大仓库克隆可能十几分钟无响应,
+        期间每 60s 报一次在途;结束附带耗时;网络异常等折算为该仓库失败而不中断整批。"""
+        full = item["full_name"]
+        target = f"{item['org']}/{item['gitea_name']}"
+        start = time.monotonic()
+        task = asyncio.ensure_future(self._create_mirror(item))
+        while not task.done():
+            await asyncio.wait({task}, timeout=60.0)
+            if not task.done():
+                self.log(f"{prefix}仍在迁移 {full} → {target}"
+                         f"(已 {_fmt_elapsed(time.monotonic() - start)})…")
+        dur = _fmt_elapsed(time.monotonic() - start)
+        try:
+            ok, detail = task.result()
+        except Exception as e:
+            return False, f"{type(e).__name__}: {e}(耗时 {dur})"
+        if ok:
+            return True, f"{detail} · {dur}"
+        return False, f"{detail}(耗时 {dur})"
+
     async def reconcile(self) -> str:
         if self.reconcile_running:
             return "已有对账在进行中"
@@ -430,6 +496,8 @@ class MirrorService:
             self.log("自检未完成,按现有信息继续对账", "warn")
         self.reconcile_running = True
         self.log("开始对账…")
+        self.progress_begin("对账", 0)
+        self.progress_step("刷新目录视图…")
         try:
             await self.refresh_view()
             pending = [v for v in self.repos.values() if v["status"] in ("missing", "failed")]
@@ -444,24 +512,36 @@ class MirrorService:
                 self.log(summary)
                 return summary
 
+            total = len(pending)
+            self.progress_total(total)
             created = failed = 0
-            for item in pending:
+            for i, item in enumerate(pending, 1):
                 org = item["org"]
+                full_low = item["full_name"].lower()
+                tag = f"[{i}/{total}] "
+                self.progress_step(f"{item['full_name']} → {org}/{item['gitea_name']}")
                 ok, detail = await self.ensure_org(org)
                 if not ok:
                     failed += 1
-                    item.update(status="failed", error=f"组织 {org} 创建失败: {detail}")
-                    self.log(f"✗ {item['full_name']}:组织 {org} 创建失败:{detail}", "error")
+                    err = f"组织 {org} 创建失败: {detail}"
+                    self.failures[full_low] = err
+                    item.update(status="failed", error=err)
+                    self.log(f"✗ {tag}{item['full_name']}:组织 {org} 创建失败:{detail}", "error")
+                    self.progress_tick(False)
                     continue
-                ok, detail = await self._create_mirror(item)
+                self.log(f"{tag}迁移 {item['full_name']} → {org}/{item['gitea_name']}…")
+                ok, detail = await self._migrate_logged(item, tag)
                 if ok:
                     created += 1
+                    self.failures.pop(full_low, None)
                     item.update(mirrored=True, is_mirror=True, status="ok", error="")
-                    self.log(f"✓ {item['full_name']} → {org}/{item['gitea_name']}({detail})")
+                    self.log(f"✓ {tag}{item['full_name']} → {org}/{item['gitea_name']}({detail})")
                 else:
                     failed += 1
+                    self.failures[full_low] = detail
                     item.update(status="failed", error=detail)
-                    self.log(f"✗ {item['full_name']} 建镜像失败:{detail}", "error")
+                    self.log(f"✗ {tag}{item['full_name']} 建镜像失败:{detail}", "error")
+                self.progress_tick(ok)
             done = sum(1 for v in self.repos.values() if v["status"] == "ok")
             disabled = sum(1 for v in self.repos.values() if v["status"] == "disabled")
             summary = (f"对账完成:新增 {created},失败 {failed},"
@@ -474,6 +554,7 @@ class MirrorService:
             self.log(summary, "error")
             return summary
         finally:
+            self.progress = None
             self.reconcile_running = False
             self.last_reconcile = _now()
 
@@ -646,11 +727,14 @@ class MirrorService:
         ok, detail = await self.ensure_org(item["org"])
         if not ok:
             return False, f"组织 {item['org']} 创建失败: {detail}"
-        ok, detail = await self._create_mirror(item)
+        self.log(f"开始迁移 {item['full_name']} → {gitea_full}…")
+        ok, detail = await self._migrate_logged(item)
         if ok:
+            self.failures.pop(item["full_name"].lower(), None)
             item.update(mirrored=True, is_mirror=True, status="ok", error="")
-            self.log(f"✓ {item['full_name']} → {gitea_full}(已创建)")
+            self.log(f"✓ {item['full_name']} → {gitea_full}({detail})")
         else:
+            self.failures[item["full_name"].lower()] = detail
             item.update(status="failed", error=detail)
             self.log(f"✗ {item['full_name']} 建镜像失败:{detail}", "error")
         return ok, detail
@@ -750,6 +834,9 @@ class MirrorService:
         origins = {"own": 0, "org": 0, "star": 0, "extra": 0}
         for r in repos:
             origins[r["origin"]] = origins.get(r["origin"], 0) + 1
+        progress = None
+        if self.progress:
+            progress = {**self.progress, "elapsed": int(time.monotonic() - self._progress_t0)}
         return {
             "configured": {"github": self.github_ok, "gitea": self.gitea_ok},
             "github": {
@@ -777,6 +864,7 @@ class MirrorService:
             },
             "reconcile": {
                 "running": self.reconcile_running,
+                "progress": progress,
                 "last": self.last_reconcile,
                 "next": self.next_reconcile,
                 "summary": self.last_summary,

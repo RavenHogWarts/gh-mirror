@@ -40,6 +40,14 @@ function relTime(iso) {
   return iso.slice(0, 10);
 }
 
+function fmtDur(sec) {
+  sec = Math.max(0, Math.round(Number(sec) || 0));
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60), s = sec % 60;
+  if (m < 60) return `${m}m${String(s).padStart(2, "0")}s`;
+  return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m`;
+}
+
 /* ---------- 图标(内联 SVG,Lucide 风格) ---------- */
 
 const ICONS = {
@@ -260,7 +268,36 @@ function renderStatus(st) {
   }
   set("v-next", st.reconcile.next ? fmtTime(st.reconcile.next) : "仅手动");
 
+  // 批量进度(对账/批量同步):对账卡片副行切成进度条,顶栏徽标带计数
+  const prog = st.reconcile.progress || null;
+  const prBox = $("reconcile-progress"), prNote = $("v-reconcile-note");
+  if (prBox && prNote) {
+    if (prog) {
+      prNote.classList.add("hidden");
+      prBox.classList.remove("hidden");
+      const total = prog.total ?? 0, done = prog.done ?? 0;
+      const current = prog.current || "";
+      const bar = prBox.querySelector(".pbar");
+      const fill = bar.querySelector("i");
+      const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : null;
+      bar.classList.toggle("indeterminate", pct === null);
+      fill.style.width = pct === null ? "" : pct + "%";
+      if (pct === null) bar.removeAttribute("aria-valuenow");
+      else bar.setAttribute("aria-valuenow", String(pct));
+      const text = $("pbar-text");
+      text.textContent = pct === null
+        ? (current || `${prog.title}…`)
+        : `${prog.title} ${done}/${total}` + (current ? ` · ${current.split(" → ")[0]}` : "");
+      text.title = current + (prog.elapsed ? `\n已进行 ${fmtDur(prog.elapsed)}` : "");
+    } else {
+      prBox.classList.add("hidden");
+      prNote.classList.remove("hidden");
+    }
+  }
+
   $("running-badge").classList.toggle("hidden", !st.reconcile.running);
+  set("running-badge-text", st.reconcile.running && prog && prog.total > 0
+    ? `对账中 ${prog.done}/${prog.total}…` : "对账中…");
   if (_reconcileShown !== st.reconcile.running) {
     _reconcileShown = st.reconcile.running;
     const b = $("btn-reconcile");

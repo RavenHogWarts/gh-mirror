@@ -271,6 +271,38 @@ a:hover { text-decoration: underline; }
 .card.err { border-color: var(--danger); }
 .card.err .card-value { color: var(--danger); }
 
+/* 对账/批量同步进行中:卡片副行替换为进度条 */
+.card-progress { margin-top: 8px; }
+.pbar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  overflow: hidden;
+}
+.pbar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+.pbar.indeterminate i {
+  width: 34%;
+  animation: pbar-slide 1.2s ease-in-out infinite;
+}
+@keyframes pbar-slide {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(320%); }
+}
+.pbar-text {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---------------- 面板 ---------------- */
 
 main { padding-bottom: 90px; } /* 给浮动批量栏留空间 */

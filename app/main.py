@@ -451,13 +451,20 @@ async def api_sync_bulk(body: dict):
     if not isinstance(targets, list) or not targets:
         raise HTTPException(422, "targets 应为非空数组(org/repo 列表)")
     results = []
-    for t in targets:
-        parts = _split_target(t)
-        if parts is None:
-            results.append({"target": str(t), "ok": False, "detail": "格式应为 org/repo"})
-            continue
-        ok, detail = await svc.ensure_sync(str(t).strip())
-        results.append({"target": str(t), "ok": ok, "detail": detail})
+    svc.progress_begin("立即同步", len(targets))
+    try:
+        for t in targets:
+            parts = _split_target(t)
+            if parts is None:
+                results.append({"target": str(t), "ok": False, "detail": "格式应为 org/repo"})
+                svc.progress_tick(False)
+                continue
+            svc.progress_step(str(t).strip())
+            ok, detail = await svc.ensure_sync(str(t).strip())
+            results.append({"target": str(t), "ok": ok, "detail": detail})
+            svc.progress_tick(ok)
+    finally:
+        svc.progress = None
     synced = sum(1 for r in results if r["ok"])
     svc.log(f"批量同步:成功 {synced}/{len(results)}",
             "info" if synced == len(results) else "warn")
