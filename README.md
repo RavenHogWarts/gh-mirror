@@ -84,6 +84,24 @@ token(GitHub PAT 在 https://github.com/settings/tokens 生成,勾 `repo`,镜像
 > 读取一次初始化;之后一切以网页设置为准。若走这条路,改完 `.env` 后要用
 > `docker compose up -d`(重建容器)而不是 `restart`(环境变量只在容器创建时注入)。
 
+## 浏览器脚本(油猴):GitHub 页面一键同步
+
+`userscript/gh-mirror.user.js` —— 在任意 GitHub 仓库页的头部操作区
+(Notifications / Fork / Star 旁)注入一个 gh-mirror 按钮,免开面板即可操作:
+
+- **按状态显示并行动**:未收录 →「加入 gh-mirror」(加入目录并按默认规则启用);
+  未启用 →「启用同步」;待补/失败 →「立即同步」(建拉一体);已镜像 →「立即同步」(拉取)
+- 按钮悬停可看镜像位置 / 失败原因;操作结果以 Toast 提示
+- 启用时若面板没配默认组织,会列出面板组织让你现场选一个
+
+安装:Tampermonkey → 新建脚本 → 粘贴 `userscript/gh-mirror.user.js` 全文保存;
+默认面板地址 `http://localhost:13655`,用油猴菜单「gh-mirror:设置面板地址」修改
+(面板不在本机时需在脚本头部 `@connect` 追加对应域名)。
+
+> 选择油猴脚本而非浏览器扩展:单文件零构建,`GM_xmlhttpRequest` 在扩展上下文发请求,
+> 天然绕过 CORS / 私网访问限制,面板零改动;需要右键菜单 / 弹出窗时再升级扩展,
+> 逻辑可原样移植。
+
 ## 配置管理(网页设置)
 
 运行时配置的唯一事实源是 `mirror_data` 卷里的 `/app/data/config.json`,
