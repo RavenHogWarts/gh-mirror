@@ -238,13 +238,21 @@ async def api_orgs_delete(name: str):
 @app.patch("/api/orgs/{name}")
 async def api_orgs_patch(name: str, body: dict):
     desc = str(body.get("description", "") or "").strip()
+    if not any(o["name"].lower() == name.lower() for o in store.orgs):
+        raise HTTPException(404, f"组织不存在: {name}")
     orgs = [
         {**o, "description": desc} if o["name"].lower() == name.lower() else o
         for o in store.orgs
     ]
-    if len(orgs) == len(store.orgs):
-        raise HTTPException(404, f"组织不存在: {name}")
     store.update({"orgs": orgs})
+    # 描述尽力同步到 Gitea(面板为准,Gitea 侧失败不阻塞本地保存)
+    if svc.gitea_ok:
+        try:
+            ok, detail = await gitea.update_org_desc(name, desc)
+        except Exception as e:  # token 失效 / 网络异常:仅记录,不影响面板侧结果
+            ok, detail = False, f"{type(e).__name__}: {e}"
+        if not ok:
+            svc.log(f"组织 {name} 描述同步到 Gitea 失败:{detail}", "warn")
     return _orgs_payload()
 
 

@@ -385,15 +385,16 @@ class MirrorService:
 
     # ---------------- 组织落位 ----------------
 
-    async def ensure_org(self, name: str) -> tuple[bool, str]:
-        """组织存在→ok;不存在→创建(描述取面板配置,创建者即 token 用户)。"""
+    async def ensure_org(self, name: str, desc: str = "") -> tuple[bool, str]:
+        """组织存在→ok;不存在→创建(描述优先取传入值,缺省查面板配置,创建者即 token 用户)。"""
         try:
             if await self.gitea.get_org(name) is not None:
                 return True, "已存在"
         except GiteaError as e:
             return False, str(e)
-        desc = next((o.get("description", "") for o in self.store.orgs
-                     if o["name"].lower() == name.lower()), "")
+        if not desc:
+            desc = next((o.get("description", "") for o in self.store.orgs
+                         if o["name"].lower() == name.lower()), "")
         ok, detail = await self.gitea.create_org(name, desc)
         if ok:
             self.log(f"✓ 自动创建组织 {name}")
@@ -661,10 +662,12 @@ class MirrorService:
         return ok, detail
 
     async def rename_org(self, old: str, new: str) -> tuple[bool, str]:
-        """组织改名 = 建新组织 → 转移全部仓库 → 改配置引用 → 删旧组织。"""
+        """组织改名 = 建新组织 → 转移全部仓库 → 改配置引用 → 删旧组织。描述随条目保留。"""
         if old.lower() == new.lower():
             return True, "名称未变化"
-        ok, detail = await self.ensure_org(new)
+        old_desc = next((o.get("description", "") for o in self.store.orgs
+                         if o["name"].lower() == old.lower()), "")
+        ok, detail = await self.ensure_org(new, old_desc)
         if not ok:
             return False, f"创建组织 {new} 失败: {detail}"
         try:
@@ -679,16 +682,15 @@ class MirrorService:
             else:
                 self.log(f"✗ 转移 {old}/{info['name']} 失败:{d2}", "error")
         # 配置引用一次性改写(组织表/默认/指派/映射/手动清单/已知镜像位置)
+        new_exists = any(o["name"].lower() == new.lower() for o in self.store.orgs)
         orgs = []
-        seen_new = False
         for o in self.store.orgs:
-            if o["name"].lower() == new.lower():
-                seen_new = True
+            if o["name"].lower() == old.lower():
+                if not new_exists:
+                    orgs.append({**o, "name": new})  # 原位改名,描述等字段保留
+                # 目标名已有独立条目:旧条目并入之(沿用已有条目的描述)
+            else:
                 orgs.append(o)
-            elif o["name"].lower() != old.lower():
-                orgs.append(o)
-        if not seen_new:
-            orgs.append({"name": new, "description": ""})
         self.store.update({
             "orgs": orgs,
             "default_org": new if self.store.default_org.lower() == old.lower() else self.store.default_org,

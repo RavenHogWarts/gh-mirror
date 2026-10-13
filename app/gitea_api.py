@@ -79,6 +79,18 @@ class GiteaClient:
             detail = resp.text[:200]
         return False, f"HTTP {resp.status_code}: {detail}"
 
+    async def update_org_desc(self, name: str, description: str) -> tuple[bool, str]:
+        """更新组织描述;缺省字段 Gitea 视为不变,只传 description 即可。"""
+        resp = await self._request("PATCH", f"/orgs/{name}", {"description": description})
+        if resp.status_code == 200:
+            return True, "已更新"
+        detail = ""
+        try:
+            detail = resp.json().get("message", "") or resp.text[:200]
+        except Exception:
+            detail = resp.text[:200]
+        return False, f"HTTP {resp.status_code}: {detail}"
+
     async def list_org_repos(self, org: str) -> dict[str, dict]:
         """列某组织的全部仓库,key 为 owner/name 小写;组织不存在返回空。"""
         repos: dict[str, dict] = {}
