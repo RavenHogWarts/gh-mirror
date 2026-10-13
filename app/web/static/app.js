@@ -14,6 +14,7 @@ const esc = (s) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 async function api(path, opts) {
+  if (opts && opts.method && opts.method !== "GET") state.lastActionTs = Date.now();
   const resp = await fetch(path, opts);
   if (!resp.ok) {
     let msg = `HTTP ${resp.status}`;
@@ -84,6 +85,8 @@ const state = {
   orphanChecked: new Set(),    // 孤儿表选中(org/name)
   defaultOrg: "", counts: {},
   lastRefresh: null,           // Date | "error"
+  lastActionTs: 0,             // 最近一次写操作时间(自适应轮询:操作后保持快轮)
+  _lastStatus: null,           // 上一轮 /api/status(轮询间隔决策用)
 };
 
 const STATUS_DEFS = [
@@ -1260,14 +1263,18 @@ $("settings-form").addEventListener("submit", async (ev) => {
 
 /* ---------- 轮询与入口 ---------- */
 
+let refreshing = false;   // 防重入:上一轮未完成时跳过(慢网络下不叠加请求)
 let logCursor = -1;       // 日志增量游标(-1 = 首次全量拉取)
 
 async function refresh() {
+  if (refreshing) return;
+  refreshing = true;
   try {
     const [st, repos, orphans, orgs, logsR] = await Promise.all([
       api("/api/status"), api("/api/repos"), api("/api/orphans"),
       api("/api/orgs"), api(`/api/logs${logCursor >= 0 ? "?after=" + logCursor : ""}`),
     ]);
+    state._lastStatus = st;
     // 日志:正常追加;reset(服务重启,序号回卷)则全量替换
     if (logsR.reset) state._lastLogs = logsR.logs;
     else if (logCursor >= 0) state._lastLogs = (state._lastLogs || []).concat(logsR.logs).slice(-300);
@@ -1292,20 +1299,44 @@ async function refresh() {
   } catch (e) {
     console.error("刷新失败:", e);
     state.lastRefresh = "error";
+  } finally {
+    refreshing = false;
   }
 }
 
 /* 最后刷新时间指示;页面不可见时暂停轮询 */
+let _lastLabel = "";
 function updateLastRefreshLabel() {
   const el = $("last-refresh");
   if (!el) return;
-  if (state.lastRefresh === "error") el.textContent = "刷新失败,重试中…";
+  let txt = "";
+  if (state.lastRefresh === "error") txt = "刷新失败,重试中…";
   else if (state.lastRefresh instanceof Date) {
     const s = Math.round((Date.now() - state.lastRefresh.getTime()) / 1000);
-    el.textContent = s < 5 ? "刚刚更新" : `${s} 秒前更新`;
-  } else el.textContent = "";
+    txt = s < 5 ? "刚刚更新" : `${s} 秒前更新`;
+  }
+  if (txt !== _lastLabel) { _lastLabel = txt; el.textContent = txt; }
 }
 
-refresh();
-setInterval(() => { if (!document.hidden) refresh(); }, 4000);
+/* 自适应轮询:对账/备份进行中或刚操作过 → 4s;空闲 → 15s;出错 → 8s。
+   面板空闲时间远多于忙碌时间,固定 4s 会让前后端做大量无谓工作。 */
+const POLL_ACTIVE_MS = 4000, POLL_IDLE_MS = 15000, POLL_ERROR_MS = 8000;
+
+function nextPollDelay() {
+  const st = state._lastStatus;
+  if (st && (st.reconcile.running || st.backup.running)) return POLL_ACTIVE_MS;
+  if (state.lastActionTs && Date.now() - state.lastActionTs < 30000) return POLL_ACTIVE_MS;
+  if (state.lastRefresh === "error") return POLL_ERROR_MS;
+  return POLL_IDLE_MS;
+}
+
+function poll() {
+  const p = document.hidden ? Promise.resolve() : refresh();
+  p.finally(() => { setTimeout(poll, nextPollDelay()); });
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refresh(); // 回到页面立即刷新一次,不等下个周期
+});
+poll();
 setInterval(updateLastRefreshLabel, 1000);
