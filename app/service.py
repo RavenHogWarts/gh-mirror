@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import subprocess
+import tempfile
 import time
 from collections import deque
 from datetime import datetime, timezone
@@ -926,19 +928,24 @@ class MirrorService:
         if self._backup_running:
             return False, "已有备份在执行"
 
-        def _run() -> subprocess.CompletedProcess:
-            return subprocess.run(
-                self.store.backup_cmd, shell=True, capture_output=True,
-                text=True, timeout=3600,
-            )
+        def _run() -> tuple[int, str]:
+            # 输出重定向到临时文件,结束后只读尾部:大输出(dump 进度)不驻留内存
+            with tempfile.TemporaryFile() as f:
+                proc = subprocess.run(
+                    self.store.backup_cmd, shell=True, stdout=f,
+                    stderr=subprocess.STDOUT, timeout=3600,
+                )
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                f.seek(max(0, size - 4096))
+                return proc.returncode, f.read().decode("utf-8", "replace").strip()[-1500:]
 
         self._backup_running = True
         self.log("开始执行备份命令…")
         try:
-            proc = await asyncio.to_thread(_run)
-            tail = (proc.stdout + proc.stderr).strip()[-1500:]
-            ok = proc.returncode == 0
-            self.log(("✓ 备份完成\n" if ok else "✗ 备份失败(退出码 %d)\n" % proc.returncode) + tail,
+            rc, tail = await asyncio.to_thread(_run)
+            ok = rc == 0
+            self.log(("✓ 备份完成\n" if ok else "✗ 备份失败(退出码 %d)\n" % rc) + tail,
                      "info" if ok else "error")
             return ok, tail
         except subprocess.TimeoutExpired:
