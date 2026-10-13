@@ -58,6 +58,9 @@ class MirrorService:
         self.gitea_orgs: list[str] = []
         self.org_repo_counts: dict[str, int] = {}
         self.logs: deque[dict] = deque(maxlen=300)
+        # 数据版本号:视图重建 / 条目就地变更 / 配置落盘时 +1,
+        # /api/repos 等列表接口据此做 ETag,未变化时回 304 跳过序列化
+        self.data_version = 0
         self.reconcile_running = False
         self.last_reconcile: str | None = None
         self.next_reconcile: str | None = None
@@ -90,9 +93,14 @@ class MirrorService:
         # 批量操作进度(对账 / 批量同步可并发):按操作各持一份,互不清除;
         # status_payload 取最近活跃的一个暴露给前端画进度条
         self.progress_ops: dict[int, dict] = {}
+        # 配置落盘 → 数据版本 +1(仓库行的 org/位置等字段源自配置)
+        store.on_change = self._bump_data_version
 
     def log(self, msg: str, level: str = "info") -> None:
         self.logs.append({"time": _now(), "level": level, "msg": msg})
+
+    def _bump_data_version(self) -> None:
+        self.data_version += 1
 
     def invalidate_gitea_cache(self) -> None:
         """Gitea 侧发生写操作(建/删/转移仓库、建/删组织):扫描缓存立即失效。"""
@@ -439,6 +447,7 @@ class MirrorService:
             if key not in expected_keys
         ]
         self.repos = view
+        self._bump_data_version()
 
     async def _scan_gitea(self, managed: set[str]) -> None:
         """全量扫描 Gitea 侧(token 用户的组织 + 相关组织的仓库),结果写入缓存。"""
@@ -577,6 +586,7 @@ class MirrorService:
                     err = f"组织 {org} 创建失败: {detail}"
                     self.failures[full_low] = err
                     item.update(status="failed", error=err)
+                    self._bump_data_version()
                     self.log(f"✗ {tag}{item['full_name']}:组织 {org} 创建失败:{detail}", "error")
                     self.progress_tick(prog, False)
                     continue
@@ -592,6 +602,7 @@ class MirrorService:
                     self.failures[full_low] = detail
                     item.update(status="failed", error=detail)
                     self.log(f"✗ {tag}{item['full_name']} 建镜像失败:{detail}", "error")
+                self._bump_data_version()  # 就地改了条目,ETag 需感知
                 self.progress_tick(prog, ok)
             done = sum(1 for v in self.repos.values() if v["status"] == "ok")
             disabled = sum(1 for v in self.repos.values() if v["status"] == "disabled")
@@ -791,6 +802,7 @@ class MirrorService:
             self.failures[item["full_name"].lower()] = detail
             item.update(status="failed", error=detail)
             self.log(f"✗ {item['full_name']} 建镜像失败:{detail}", "error")
+        self._bump_data_version()  # 就地改了条目,ETag 需感知
         return ok, detail
 
     async def delete_mirror(self, org: str, name: str) -> tuple[bool, str]:

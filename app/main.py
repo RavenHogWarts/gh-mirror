@@ -9,8 +9,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
@@ -135,16 +135,36 @@ async def api_status():
     return svc.status_payload()
 
 
+# /api/repos 输出的字段白名单:内部视图字典还含 mirrored/is_mirror/gitea_name 等
+# 仅后端用的键,不进 payload(前端与用户脚本都不使用)
+_REPO_FIELDS = (
+    "full_name", "html_url", "private", "fork", "origin", "gh_owner",
+    "org", "gitea_full", "default_target", "mirror_full",
+    "gitea_updated", "status", "error",
+)
+
+
+def _data_etag_response(request: Request, content) -> Response:
+    """列表接口通用响应:带数据版本 ETag,未变化回 304,跳过 JSON 序列化与传输。
+    (面板轮询的主体开销就在这几个大列表上)"""
+    etag = f'W/"v{svc.data_version}"'
+    if etag in request.headers.get("if-none-match", ""):
+        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
+    return JSONResponse(content, headers={"ETag": etag, "Cache-Control": "no-cache"})
+
+
 @app.get("/api/repos")
-async def api_repos():
+async def api_repos(request: Request):
     _maybe_refresh_view()
-    return sorted(svc.repos.values(), key=lambda r: r["full_name"].lower())
+    rows = sorted(svc.repos.values(), key=lambda r: r["full_name"].lower())
+    return _data_etag_response(request, [{k: r[k] for k in _REPO_FIELDS} for r in rows])
 
 
 @app.get("/api/orphans")
-async def api_orphans():
+async def api_orphans(request: Request):
     _maybe_refresh_view()
-    return sorted(svc.orphans, key=lambda r: r["gitea_full"].lower())
+    return _data_etag_response(
+        request, sorted(svc.orphans, key=lambda r: r["gitea_full"].lower()))
 
 
 @app.get("/api/logs")

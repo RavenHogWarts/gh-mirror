@@ -62,6 +62,8 @@ class ConfigStore:
         self.path = data_dir / "config.json"
         self.lock = threading.Lock()
         self.settings: Settings = self._load()
+        # 落盘成功后的回调(无参数),由使用方注入(如视图版本号 +1)
+        self.on_change = None
 
     # ---- 让 service 可以像旧 Settings 一样直接 store.xxx 取值 ----
     def __getattr__(self, name: str):
@@ -262,6 +264,8 @@ class ConfigStore:
                 encoding="utf-8",
             )
             tmp.replace(self.path)
+        if self.on_change:
+            self.on_change()
         return self.settings
 
     # ---- 给 UI 看的脱敏视图 ----
