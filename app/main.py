@@ -61,9 +61,10 @@ async def _scheduler_loop() -> None:
         except (asyncio.TimeoutError, TimeoutError):
             pass
         config_changed.clear()
-        svc.next_reconcile = _next_run()
         if store.reconcile_every_min > 0:
             await svc.reconcile()
+        # 按对账结束时刻推算下次(长迁移轮次后显示不偏早);0=仅手动时为 None
+        svc.next_reconcile = _next_run()
 
 
 @asynccontextmanager
