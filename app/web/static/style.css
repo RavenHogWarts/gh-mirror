@@ -849,6 +849,23 @@ fieldset .field:last-child { margin-bottom: 0; }
   word-break: break-all;
 }
 
+/* 确认弹窗内可选操作(如"同时从列表移除") */
+.confirm-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 8px 11px;
+  background: var(--bg);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.confirm-check:hover { border-color: var(--faint); }
+.confirm-check input { accent-color: var(--accent); flex: none; }
+
 /* ---------------- Toast ---------------- */
 
 .toasts {

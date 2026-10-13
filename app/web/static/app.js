@@ -148,7 +148,7 @@ function closeModal(id) {
   const i = modalStack.indexOf(id);
   if (i >= 0) modalStack.splice(i, 1);
   if (id === "modal-confirm" && confirmResolve) {
-    const r = confirmResolve; confirmResolve = null; r(false);
+    const r = confirmResolve; confirmResolve = null; r({ ok: false, checked: false });
   }
   if (!modalStack.length) {
     document.body.classList.remove("modal-open");
@@ -156,8 +156,9 @@ function closeModal(id) {
   }
 }
 
-/* 确认弹窗:返回 Promise<boolean>,Esc/点遮罩/取消 = false */
-function confirmDialog({ title, msg, items = null, okText = "确认", danger = true }) {
+/* 确认弹窗:返回 Promise<{ok, checked}>;Esc/点遮罩/取消 = ok:false。
+   check 传入 {label, checked} 时显示复选框(如"同时从目录移除")。 */
+function confirmDialog({ title, msg, items = null, okText = "确认", danger = true, check = null }) {
   return new Promise((resolve) => {
     confirmResolve = resolve;
     $("confirm-title").textContent = title;
@@ -167,6 +168,12 @@ function confirmDialog({ title, msg, items = null, okText = "确认", danger = t
       ul.innerHTML = items.map((s) => `<li>${esc(s)}</li>`).join("");
       ul.classList.remove("hidden");
     } else ul.classList.add("hidden");
+    const box = $("confirm-check");
+    if (check) {
+      $("confirm-check-label").textContent = check.label;
+      $("confirm-check-input").checked = !!check.checked;
+      box.classList.remove("hidden");
+    } else box.classList.add("hidden");
     const ok = $("confirm-ok");
     ok.textContent = okText;
     ok.className = `btn ${danger ? "danger" : "primary"}`;
@@ -175,7 +182,14 @@ function confirmDialog({ title, msg, items = null, okText = "确认", danger = t
 }
 
 $("confirm-ok").addEventListener("click", () => {
-  if (confirmResolve) { const r = confirmResolve; confirmResolve = null; r(true); }
+  if (confirmResolve) {
+    const r = confirmResolve; confirmResolve = null;
+    const box = $("confirm-check");
+    r({
+      ok: true,
+      checked: !box.classList.contains("hidden") && $("confirm-check-input").checked,
+    });
+  }
   closeModal("modal-confirm");
 });
 $("confirm-cancel").addEventListener("click", () => closeModal("modal-confirm"));
@@ -401,12 +415,12 @@ $("org-list").addEventListener("click", async (ev) => {
   if (del) {
     closeAllMenus();
     const name = del.dataset.orgDel;
-    const ok = await confirmDialog({
+    const res = await confirmDialog({
       title: `删除组织 ${name}?`,
       msg: "仅限<b>空组织</b>且未被默认/指派/映射引用。Gitea 侧组织一并删除。",
       okText: "删除",
     });
-    if (!ok) return;
+    if (!res.ok) return;
     try {
       await api(`/api/orgs/${encodeURIComponent(name)}`, { method: "DELETE" });
       toast(`组织 ${name} 已删除`);
@@ -746,13 +760,13 @@ $("bulk-unassign").addEventListener("click", async () => {
 $("bulk-stop").addEventListener("click", async () => {
   const repos = selectedItems().filter((r) => r.status === "ok").map((r) => r.full_name);
   if (!repos.length) return toast("所选仓库都没有在同步的镜像", "info");
-  const ok = await confirmDialog({
+  const res = await confirmDialog({
     title: `停止同步 ${repos.length} 个仓库?`,
     msg: "镜像<b>保留</b>在 Gitea 并继续自行按间隔拉取;面板不再管理、不再重建(可随时重新启用)。要彻底停拉取:Gitea 网页转普通仓库,或删除镜像。",
     items: repos.slice(0, 8).concat(repos.length > 8 ? [`… 共 ${repos.length} 个`] : []),
     okText: "停止同步",
   });
-  if (!ok) return;
+  if (!res.ok) return;
   try {
     const res = await postJSON("/api/repos/stop-bulk", { repos });
     toast(`已停止同步 ${res.stopped} 个(镜像保留)`);
@@ -765,13 +779,13 @@ $("bulk-delete").addEventListener("click", async () => {
   const sel = selectedItems().filter((r) => r.status === "ok" || r.mirror_full);
   const targets = sel.map((r) => r.status === "ok" ? r.gitea_full : r.mirror_full);
   if (!targets.length) return;
-  const ok = await confirmDialog({
+  const res = await confirmDialog({
     title: `删除 ${targets.length} 个 Gitea 镜像?`,
     msg: "镜像及其数据将被删除,<b>不可恢复</b>;GitHub 原仓库不受影响。仍在启用清单中的仓库会在下次对账时自动重建。",
     items: targets.slice(0, 8).concat(targets.length > 8 ? [`… 共 ${targets.length} 个`] : []),
     okText: "删除镜像",
   });
-  if (!ok) return;
+  if (!res.ok) return;
   try {
     const res = await postJSON("/api/mirror/delete-bulk", { targets });
     resultToast(res, "deleted", "total", "批量删除");
@@ -831,13 +845,13 @@ $("orphan-check-all").addEventListener("change", (ev) => {
 $("orphan-bulk-del").addEventListener("click", async () => {
   const targets = [...state.orphanChecked];
   if (!targets.length) return;
-  const ok = await confirmDialog({
+  const res = await confirmDialog({
     title: `删除 ${targets.length} 个孤儿镜像?`,
     msg: "孤儿镜像数据将被删除,<b>不可恢复</b>。它们已不在目录中,不会被重建。",
     items: targets.slice(0, 8).concat(targets.length > 8 ? [`… 共 ${targets.length} 个`] : []),
     okText: "删除镜像",
   });
-  if (!ok) return;
+  if (!res.ok) return;
   try {
     const res = await postJSON("/api/mirror/delete-bulk", { targets });
     resultToast(res, "deleted", "total", "批量删除");
@@ -963,12 +977,12 @@ function bindRowActions(root) {
       setTimeout(refresh, 800);
     } else if (stop) {
       const full = stop.dataset.stop;
-      const ok = await confirmDialog({
+      const res = await confirmDialog({
         title: `停止同步 ${full}?`,
         msg: "镜像<b>保留</b>在 Gitea 并继续自行按间隔拉取;面板不再管理、不再重建(可随时重新启用)。",
         okText: "停止同步",
       });
-      if (!ok) return;
+      if (!res.ok) return;
       try {
         await postJSON("/api/repos/stop-bulk", { repos: [full] });
         toast(`${full} 已停止同步(镜像保留)`);
@@ -983,16 +997,26 @@ function bindRowActions(root) {
       refresh();
     } else if (del) {
       const target = del.dataset.del;
-      const ok = await confirmDialog({
+      // 手动清单仓库:默认只删镜像(条目留在目录,下轮对账重建);
+      // 勾选"从列表移除"才完整删除(镜像 + 目录条目)
+      const item = state.repos.find((r) => r.gitea_full === target || r.mirror_full === target);
+      const manual = item && item.origin === "extra";
+      const res = await confirmDialog({
         title: `删除镜像 ${target}?`,
         msg: "此操作不可恢复(仅影响 Gitea 侧,GitHub 原仓库不动)。仍在启用清单中的仓库会在下次对账时重建。",
         okText: "删除镜像",
+        ...(manual ? { check: { label: "同时从列表移除(完整删除,不再重建)", checked: false } } : {}),
       });
-      if (!ok) return;
+      if (!res.ok) return;
       del.disabled = true;
       try {
         await api(`/api/mirror/${target}`, { method: "DELETE" });
-        toast(`已删除 ${target}`);
+        if (res.checked && item) {
+          try {
+            await api(`/api/extra/${encodeURIComponent(item.full_name)}`, { method: "DELETE" });
+          } catch (e) { toast(`镜像已删除,但从列表移除失败:${e.message}`, "err"); }
+        }
+        toast(res.checked ? `已删除 ${target} 并从列表移除` : `已删除 ${target}`);
       } catch (e) { toast("删除失败 " + e.message, "err"); }
       setTimeout(refresh, 600);
     } else if (exdel) {
