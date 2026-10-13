@@ -34,7 +34,8 @@ EDITABLE = (
 )
 _TOKENS = ("github_token", "gitea_token")
 _INTERVAL_RE = re.compile(r"^\d+[hms][0-9hms]*$")  # 形如 8h0m0s / 30m / 900s
-_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,38}$")   # gitea 用户/组织/仓库名
+_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,38}$")   # gitea 仓库名(允许点号)
+_ORG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,38}$")     # gitea 组织/用户名(无点号,与前端一致)
 _SOURCE_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")  # owner/repo
 
 
@@ -91,8 +92,8 @@ class ConfigStore:
             if not isinstance(item, dict):
                 raise ConfigError("orgs 元素应为 {name, description}")
             name = str(item.get("name", "")).strip()
-            if not _NAME_RE.match(name):
-                raise ConfigError(f"组织名不合法: {name!r}(字母数字、点、下划线、连字符)")
+            if not _ORG_RE.match(name):
+                raise ConfigError(f"组织名不合法: {name!r}(字母/数字开头,可含连字符与下划线,不含点号)")
             if name.lower() in seen:
                 raise ConfigError(f"组织名重复: {name}")
             seen.add(name.lower())
@@ -123,8 +124,8 @@ class ConfigStore:
             g = str(g or "").strip()
             if not _NAME_RE.match(gh):
                 raise ConfigError(f"GitHub 组织名不合法: {gh!r}")
-            if not _NAME_RE.match(g):
-                raise ConfigError(f"目标组织名不合法: {g!r}")
+            if not _ORG_RE.match(g):
+                raise ConfigError(f"目标组织名不合法: {g!r}(Gitea 组织名不含点号)")
             out[gh.lower()] = g
         return out
 
@@ -229,8 +230,8 @@ class ConfigStore:
                 value = self._clean_orgs(value)
             elif key == "default_org":
                 value = str(value or "").strip()
-                if value and not _NAME_RE.match(value):
-                    raise ConfigError(f"default_org 不合法: {value!r}")
+                if value and not _ORG_RE.match(value):
+                    raise ConfigError(f"default_org 不合法: {value!r}(Gitea 组织名不含点号)")
             elif key == "repo_assignments":
                 valid = {o["name"].lower() for o in merged["orgs"]}
                 value = self._clean_assignments(value, valid)
