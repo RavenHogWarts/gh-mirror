@@ -276,3 +276,7 @@ app/
 Dockerfile / docker-compose.yml / .env.example
 .github/workflows/release.yml  # 打 v* tag 自动发镜像到 ghcr
 ```
+
+## 许可证
+
+[GPL-3.0](LICENSE)

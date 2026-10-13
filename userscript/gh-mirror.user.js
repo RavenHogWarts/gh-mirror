@@ -5,6 +5,7 @@
 // @description  在 GitHub 仓库页一键加入 gh-mirror 目录 / 启用同步 / 立即拉取,状态实时显示
 // @author       RavenHogwarts
 // @homepageURL  https://github.com/RavenHogWarts/gh-mirror
+// @license      GPL-3.0
 // @match        https://github.com/*
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest
