@@ -10,7 +10,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
@@ -92,19 +93,29 @@ def _spawn(coro) -> None:
 
 
 app = FastAPI(title="gh-mirror", version=__version__, docs_url="/api/docs", lifespan=lifespan)
+# JSON/静态资源 gzip:仓库表与静态 JS/CSS 的传输量降一个量级(304 无响应体,不受影响)
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.mount("/static", StaticFiles(directory=_web_dir / "static"), name="static")
 
 
 # ---------------- 页面 ----------------
 
+_asset_hash: tuple[tuple[float, ...], str] | None = None
+
+
 def _asset_version() -> str:
-    """静态资源内容哈希:文件一变 URL 就变,浏览器不会再拿到旧缓存的 JS/CSS。"""
-    h = hashlib.sha256()
-    for name in ("app.js", "style.css"):
-        p = _web_dir / "static" / name
-        if p.is_file():
-            h.update(p.read_bytes())
-    return h.hexdigest()[:10]
+    """静态资源内容哈希(按 mtime 缓存,不再每个请求都读文件重算):
+    文件一变 URL 就变,浏览器不会再拿到旧缓存的 JS/CSS。"""
+    global _asset_hash
+    files = [_web_dir / "static" / n for n in ("app.js", "style.css")]
+    mtimes = tuple(p.stat().st_mtime if p.is_file() else 0.0 for p in files)
+    if _asset_hash is None or _asset_hash[0] != mtimes:
+        h = hashlib.sha256()
+        for p in files:
+            if p.is_file():
+                h.update(p.read_bytes())
+        _asset_hash = (mtimes, h.hexdigest()[:10])
+    return _asset_hash[1]
 
 
 @app.get("/", include_in_schema=False)
