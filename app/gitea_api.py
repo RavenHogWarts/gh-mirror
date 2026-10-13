@@ -91,8 +91,19 @@ class GiteaClient:
             detail = resp.text[:200]
         return False, f"HTTP {resp.status_code}: {detail}"
 
+    @staticmethod
+    def _slim(r: dict) -> dict:
+        """仓库对象瘦身:面板只需要这几个字段(原始对象嵌套多,整表留存内存大)。"""
+        return {
+            "full_name": r.get("full_name", ""),
+            "owner": (r.get("owner") or {}).get("login", ""),
+            "name": r.get("name", ""),
+            "updated_at": r.get("updated_at", ""),
+            "mirror": bool(r.get("mirror")),
+        }
+
     async def list_org_repos(self, org: str) -> dict[str, dict]:
-        """列某组织的全部仓库,key 为 owner/name 小写;组织不存在返回空。"""
+        """列某组织的全部仓库(瘦身字段),key 为 owner/name 小写;组织不存在返回空。"""
         repos: dict[str, dict] = {}
         page = 1
         while page <= 50:
@@ -107,7 +118,7 @@ class GiteaClient:
             if not isinstance(data, list) or not data:
                 break
             for r in data:
-                repos[f"{r['owner']['login']}/{r['name']}".lower()] = r
+                repos[f"{r['owner']['login']}/{r['name']}".lower()] = self._slim(r)
             if len(data) < 50:
                 break
             page += 1
@@ -131,7 +142,7 @@ class GiteaClient:
         return [n for n in names if n]
 
     async def list_my_repos(self) -> dict[str, dict]:
-        """列出 token 用户可见的仓库,key 为 owner/name 小写。"""
+        """列出 token 用户可见的仓库(瘦身字段),key 为 owner/name 小写。"""
         repos: dict[str, dict] = {}
         page = 1
         while page <= 50:
@@ -144,7 +155,7 @@ class GiteaClient:
             if not isinstance(data, list) or not data:
                 break
             for r in data:
-                repos[f"{r['owner']['login']}/{r['name']}".lower()] = r
+                repos[f"{r['owner']['login']}/{r['name']}".lower()] = self._slim(r)
             if len(data) < 50:
                 break
             page += 1

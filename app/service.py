@@ -22,7 +22,9 @@ from .config_store import ConfigError, ConfigStore, normalize_source
 from .gitea_api import GiteaClient, GiteaError
 from .github_api import GHRepo, GitHubClient, GitHubError
 
-_STAR_TTL = 600.0  # Star 列表缓存 10 分钟(变动少,省 API 配额)
+_STAR_TTL = 600.0       # Star 列表缓存 10 分钟(变动少,省 API 配额)
+_GH_LIST_TTL = 120.0    # 自己/组织仓库列表缓存 2 分钟(面板轮询不再反复枚举)
+_GITEA_SCAN_TTL = 60.0  # Gitea 组织/仓库扫描缓存(写操作即时失效)
 
 
 def _now() -> str:
@@ -70,6 +72,16 @@ class MirrorService:
         # Star 列表缓存
         self._stars: list[GHRepo] = []
         self._stars_ts: float = 0.0
+        # 自己/组织仓库列表缓存(面板开着时视图每 30s 刷新,不必每次都枚举 GitHub)
+        self._own_cache: list[GHRepo] = []
+        self._own_ts: float = 0.0
+        self._org_cache: dict[str, list[GHRepo]] = {}
+        self._org_ts: dict[str, float] = {}
+        # Gitea 扫描缓存(组织名/各组织仓库/计数);写操作调 invalidate_gitea_cache 失效
+        self._gitea_scan_ts: float = 0.0
+        self._gitea_orgs_cache: list[str] = []
+        self._gitea_repos_cache: dict[str, dict] = {}
+        self._gitea_counts_cache: dict[str, int] = {}
         # 建镜像失败记录(full_name 小写 -> 错误信息)。对账/立即同步写入,
         # 视图刷新时叠加为 failed 状态;镜像就位或条目停用时清除。
         # 不放进视图字典接力:对账循环长达数分钟,期间视图会被轮询反复重建,
@@ -81,6 +93,10 @@ class MirrorService:
 
     def log(self, msg: str, level: str = "info") -> None:
         self.logs.append({"time": _now(), "level": level, "msg": msg})
+
+    def invalidate_gitea_cache(self) -> None:
+        """Gitea 侧发生写操作(建/删/转移仓库、建/删组织):扫描缓存立即失效。"""
+        self._gitea_scan_ts = 0.0
 
     # ---------------- 批量进度(状态卡片进度条;并发操作各持一份) ----------------
 
@@ -114,7 +130,7 @@ class MirrorService:
         return self._backup_running
 
     def reset_connection_state(self) -> None:
-        """配置更新后调用:清空旧连接结论,等待重新 bootstrap。"""
+        """配置更新后调用:清空旧连接结论与各缓存,等待重新 bootstrap。"""
         self.github_login = None
         self.gitea_login = None
         self.github_ok = bool(self.store.github_token)
@@ -122,6 +138,9 @@ class MirrorService:
         self.gitea_orgs = []
         self.org_repo_counts = {}
         self._stars_ts = 0.0
+        self._own_ts = 0.0
+        self._org_ts.clear()
+        self._gitea_scan_ts = 0.0
 
     # ---------------- 启用目标规则 ----------------
 
@@ -198,15 +217,19 @@ class MirrorService:
     # ---------------- 数据采集与视图 ----------------
 
     async def _collect_github(self) -> list[tuple[GHRepo, str]]:
-        """[(repo, origin)];origin ∈ own / org。"""
+        """[(repo, origin)];origin ∈ own / org。列表带 TTL 缓存(配置变更即失效)。"""
         if not (self.github_ok and self.store.github_token):
             return []
-        out: list[tuple[GHRepo, str]] = []
-        for r in await self.gh.list_own_repos(self.store.include_forks):
-            out.append((r, "own"))
+        now = time.monotonic()
+        if now - self._own_ts >= _GH_LIST_TTL:
+            self._own_cache = await self.gh.list_own_repos(self.store.include_forks)
+            self._own_ts = now
+        out: list[tuple[GHRepo, str]] = [(r, "own") for r in self._own_cache]
         for org in self.store.github_orgs:
-            for r in await self.gh.list_org_repos(org, self.store.include_forks):
-                out.append((r, "org"))
+            if now - self._org_ts.get(org, 0.0) >= _GH_LIST_TTL:
+                self._org_cache[org] = await self.gh.list_org_repos(org, self.store.include_forks)
+                self._org_ts[org] = now
+            out.extend((r, "org") for r in self._org_cache[org])
         return out
 
     async def _collect_stars(self) -> list[GHRepo]:
@@ -342,26 +365,18 @@ class MirrorService:
                 "error": "",
             }
 
-        # ---- Gitea 实况(受管组织 + 我的全部组织 + 已知镜像所在组织) ----
+        # ---- Gitea 实况(受管组织 + 我的全部组织 + 已知镜像所在组织;TTL 缓存) ----
         gitea_repos: dict[str, dict] = {}
-        self.gitea_orgs = []
-        self.org_repo_counts = {}
-        managed = self._managed_orgs()
-        scan = set(managed)
         if self.gitea_ok and self.store.gitea_token:
-            try:
-                self.gitea_orgs = await self.gitea.list_my_orgs()
-                scan.update(self.gitea_orgs)
-            except GiteaError as e:
-                self.log(f"列出 Gitea 组织失败:{e}", "error")
-            for org in sorted(scan):
-                try:
-                    org_repos = await self.gitea.list_org_repos(org)
-                except GiteaError as e:
-                    self.log(f"列出组织 {org} 仓库失败:{e}", "error")
-                    continue
-                gitea_repos.update(org_repos)
-                self.org_repo_counts[org.lower()] = len(org_repos)
+            if time.monotonic() - self._gitea_scan_ts >= _GITEA_SCAN_TTL:
+                await self._scan_gitea(self._managed_orgs())
+                self._gitea_scan_ts = time.monotonic()
+            self.gitea_orgs = self._gitea_orgs_cache
+            self.org_repo_counts = self._gitea_counts_cache
+            gitea_repos = self._gitea_repos_cache
+        else:
+            self.gitea_orgs = []
+            self.org_repo_counts = {}
 
         # ---- 匹配:启用的看目标位置;未启用的看已知镜像位置(遗留镜像可见、不算孤儿) ----
         expected_keys: set[str] = set()
@@ -415,7 +430,7 @@ class MirrorService:
         self.orphans = [
             {
                 "gitea_full": info.get("full_name", key),
-                "org": info.get("owner", {}).get("login", ""),
+                "org": info.get("owner", ""),
                 "name": info.get("name", ""),
                 "updated_at": info.get("updated_at", ""),
                 "is_mirror": bool(info.get("mirror")),
@@ -424,6 +439,27 @@ class MirrorService:
             if key not in expected_keys
         ]
         self.repos = view
+
+    async def _scan_gitea(self, managed: set[str]) -> None:
+        """全量扫描 Gitea 侧(token 用户的组织 + 相关组织的仓库),结果写入缓存。"""
+        scan = set(managed)
+        try:
+            self._gitea_orgs_cache = await self.gitea.list_my_orgs()
+            scan.update(self._gitea_orgs_cache)
+        except GiteaError as e:
+            self.log(f"列出 Gitea 组织失败:{e}", "error")
+        repos: dict[str, dict] = {}
+        counts: dict[str, int] = {}
+        for org in sorted(scan):
+            try:
+                org_repos = await self.gitea.list_org_repos(org)
+            except GiteaError as e:
+                self.log(f"列出组织 {org} 仓库失败:{e}", "error")
+                continue
+            repos.update(org_repos)
+            counts[org.lower()] = len(org_repos)
+        self._gitea_repos_cache = repos
+        self._gitea_counts_cache = counts
 
     def _managed_orgs(self) -> set[str]:
         """受管组织集合:面板组织 ∪ 路由目标 ∪ 已知镜像所在组织。"""
@@ -453,6 +489,7 @@ class MirrorService:
         except Exception as e:
             return False, f"{type(e).__name__}: {e}"
         if ok:
+            self.invalidate_gitea_cache()
             self.log(f"✓ 自动创建组织 {name}")
         return ok, detail
 
@@ -466,7 +503,7 @@ class MirrorService:
             spec = self._extra_spec(entry)
         else:
             spec = {"clone_addr": f"https://github.com/{item['full_name']}.git", "service": "github"}
-        return await self.gitea.migrate_mirror(
+        ok, detail = await self.gitea.migrate_mirror(
             clone_addr=spec["clone_addr"],
             repo_name=item["gitea_name"],
             repo_owner=org,
@@ -475,6 +512,9 @@ class MirrorService:
             github_token=self.store.github_token,
             private=item["private"],
         )
+        if ok:
+            self.invalidate_gitea_cache()  # Gitea 侧多了仓库,扫描缓存立即失效
+        return ok, detail
 
     async def _migrate_logged(self, item: dict, prefix: str = "") -> tuple[bool, str]:
         """建镜像并输出等待进度:Gitea migrate 是同步接口,大仓库克隆可能十几分钟无响应,
@@ -645,6 +685,7 @@ class MirrorService:
             old_org = old_loc.partition("/")[0]
             ok, detail = await self.gitea.transfer_repo(old_org, name, org)
             if ok:
+                self.invalidate_gitea_cache()
                 self.log(f"✓ 已转移 {old_org}/{name} → {org}/{name}")
             else:
                 self.log(f"✗ 转移失败(下轮对账会重试创建):{detail}", "error")
@@ -697,6 +738,8 @@ class MirrorService:
 
     async def sync_one(self, org: str, name: str) -> tuple[bool, str]:
         ok, detail = await self.gitea.mirror_sync(org, name)
+        if ok:
+            self.invalidate_gitea_cache()  # updated_at 变了,让缓存尽快跟上
         self.log(f"{'✓' if ok else '✗'} 手动同步 {org}/{name}:{detail}")
         return ok, detail
 
@@ -752,6 +795,8 @@ class MirrorService:
 
     async def delete_mirror(self, org: str, name: str) -> tuple[bool, str]:
         ok, detail = await self.gitea.delete_repo(org, name)
+        if ok:
+            self.invalidate_gitea_cache()
         self.log(f"{'✓' if ok else '✗'} 删除镜像 {org}/{name}:{detail}",
                  "info" if ok else "error")
         return ok, detail
@@ -801,6 +846,7 @@ class MirrorService:
         left = await self.gitea.list_org_repos(old)
         if not left:
             await self.gitea.delete_org(old)
+        self.invalidate_gitea_cache()
         self.log(f"✓ 组织 {old} 改名为 {new}(转移 {moved} 个仓库)")
         return True, f"已改名 {old} → {new},转移 {moved} 个仓库"
 

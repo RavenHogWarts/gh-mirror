@@ -231,6 +231,7 @@ async def api_orgs_delete(name: str):
         ok, detail = await gitea.delete_org(name)
         if not ok:
             raise HTTPException(502, f"Gitea 删除组织失败: {detail}")
+        svc.invalidate_gitea_cache()
     store.update({"orgs": orgs})
     svc.log(f"✓ 组织 {name} 已删除")
     return _orgs_payload()
