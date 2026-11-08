@@ -17,8 +17,12 @@ services:
       - GITEA__server__DOMAIN=localhost
       - GITEA__server__ROOT_URL=${GITEA_PUBLIC_URL:-http://localhost:13654}/
       - GITEA__server__LFS_START_SERVER=true
-      # 允许从内网/本机地址迁移镜像(否则 migrate 内部 git URL 报 disallowed hosts)
-      - GITEA__migrations__ALLOW_LOCALNETWORKS=true
+      # Gitea 28 出网管控改用 ALLOWED_HOST_LIST(旧键 ALLOW_LOCALNETWORKS 已废弃,
+      # 单独使用等价于只放行 private/loopback,会把 github.com 一并拒掉报 disallowed hosts)。
+      # 本机走 fake-ip 代理时,容器内 github.com 解析成 198.18.x,属受限网段必须显式放行;
+      # 198.18.0.0/15 = fake-ip 段(代理改了 fake-ip 段要跟着改),private/loopback 保留
+      # 原"允许内网"语义;EGRESS_MODE 默认 lax,真公网地址无需列出即放行。
+      - GITEA__migrations__ALLOWED_HOST_LIST=198.18.0.0/15,private,loopback
     volumes:
       # 默认:named volume(推荐)。数据在 Docker 管理的卷中,down/重建不丢,仅 down -v 删除;
       # 查看实际位置:docker volume inspect gh-mirror_gitea-data

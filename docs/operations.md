@@ -18,8 +18,14 @@ Gitea 整站备份用官方 `gitea dump`。两种接法:
 
 - **URL 型手动镜像报 "Authentication failed / could not read Username"**:目标
   仓库不公开或地址不可达(被拦截的域名也会这样)。URL 源仅支持**可匿名克隆的公开仓库**;
-  要镜像本机/内网 git 地址,compose 已开 `GITEA__migrations__ALLOW_LOCALNETWORKS=true`,
+  要镜像本机/内网 git 地址,compose 已在 `ALLOWED_HOST_LIST` 放行 `private,loopback`,
   但注意**私有组织内的仓库匿名不可克隆**(Gitea 行为),跨实例镜像私有仓库需带凭据(P3)。
+- **建镜像 HTTP 422 "You can not import from disallowed hosts" / 同步报
+  "migration/cloning from 'github.com' is not allowed"**:Gitea 28 新出网策略所致。
+  本机走 fake-ip 代理时,容器内 github.com 解析成 198.18.x,属受限网段,
+  必须在 `GITEA__migrations__ALLOWED_HOST_LIST` 显式放行(compose 已含
+  `198.18.0.0/15,private,loopback`);代理改了 fake-ip 段,这里要跟着改。
+  旧键 `ALLOW_LOCALNETWORKS` 已废弃,单独使用只会放行内网,等于把 github.com 拒掉。
 - **镜像从 GitHub 删了/转私有**:Gitea 侧同步开始报错但数据保留;停止无谓重试去
   Gitea 网页 Convert to Regular Repository,或面板里删除镜像+排除。
 - **删除的镜像又回来了**:预期之内的设计——仍在 GitHub 清单/手动清单里的仓库,

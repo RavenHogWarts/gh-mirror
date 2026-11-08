@@ -129,7 +129,9 @@ services:
       - GITEA__server__SSH_DOMAIN=git.example.com
       - GITEA__server__SSH_PORT=2222          # 克隆地址里展示的 SSH 端口
       - GITEA__server__LFS_START_SERVER=true
-      - GITEA__migrations__ALLOW_LOCALNETWORKS=true
+      # Gitea 28+:出网允许列表(旧键 ALLOW_LOCALNETWORKS 已废弃)。真公网地址
+      # 默认放行,无需列出;VPS 若也走 fake-ip 代理,再加一段 198.18.0.0/15
+      - GITEA__migrations__ALLOWED_HOST_LIST=private,loopback
     volumes:
       - gitea_data:/data
     ports:
